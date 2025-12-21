@@ -1,21 +1,24 @@
 <template>
   <div class="page-container">
-    <div class="header">
-      <h2>月度健康摘要</h2>
+    <div class="page-header">
+      <div style="display: flex; align-items: center;">
+        <el-button icon="ArrowLeft" circle @click="$router.push('/')" style="margin-right: 15px" />
+        <h2>月度健康摘要</h2>
+      </div>
       <div class="controls">
         <el-date-picker v-model="month" type="month" placeholder="选择月份" value-format="YYYY-MM-01" />
-        <el-button type="primary" @click="generateReport">生成/刷新报告</el-button>
+        <el-button type="primary" @click="generateReport" style="margin-left: 10px;">生成/刷新报告</el-button>
       </div>
     </div>
 
     <el-row :gutter="20" style="margin-top:20px">
       <el-col :span="12">
-        <el-card>
+        <el-card shadow="hover">
           <div id="chart-weight" style="height: 300px;"></div>
         </el-card>
       </el-col>
       <el-col :span="12">
-        <el-card>
+        <el-card shadow="hover">
           <div id="chart-steps" style="height: 300px;"></div>
         </el-card>
       </el-col>
@@ -49,27 +52,27 @@ const generateReport = async () => {
       month: month.value
     })
     ElMessage.success(res.message)
-    // 这里应该调用GET接口刷新数据，但后端未提供，故不操作
     initCharts() // 重绘演示图表
   } catch(e) {}
 }
 
-// 模拟图表初始化
 const initCharts = () => {
   const chartWeight = echarts.init(document.getElementById('chart-weight'))
   chartWeight.setOption({
     title: { text: '体重变化 (kg)' },
+    tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: ['W1', 'W2', 'W3', 'W4'] },
     yAxis: { type: 'value', min: 60 },
-    series: [{ data: [72.5, 71.8, 71.2, 70.8], type: 'line' }]
+    series: [{ data: [72.5, 71.8, 71.2, 70.8], type: 'line', smooth: true, itemStyle: { color: '#007bff' } }]
   })
 
   const chartSteps = echarts.init(document.getElementById('chart-steps'))
   chartSteps.setOption({
     title: { text: '每日步数' },
+    tooltip: { trigger: 'axis' },
     xAxis: { type: 'category', data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
     yAxis: { type: 'value' },
-    series: [{ data: [8000, 9200, 10500, 7800, 11000, 12500, 9000], type: 'bar' }]
+    series: [{ data: [8000, 9200, 10500, 7800, 11000, 12500, 9000], type: 'bar', itemStyle: { color: '#34d399' } }]
   })
 }
 
@@ -79,6 +82,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page-container { padding: 20px; }
-.header { display: flex; justify-content: space-between; align-items: center; }
+.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+.page-header h2 { margin: 0; font-size: 24px; color: #333; }
 </style>
