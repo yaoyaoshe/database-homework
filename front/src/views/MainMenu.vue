@@ -51,7 +51,7 @@ const router = useRouter()
 const menuItems = [
   { title: '账户信息', desc: '管理个人档案与联系方式', path: '/account-info', icon: 'User' },
   { title: '预约服务', desc: '在线预约医生与专家', path: '/book-appointment', icon: 'Calendar' },
-  { title: '创建挑战', desc: '发起新的健康目标挑战', path: '/create-challenge', icon: 'Trophy' },
+  { title: '健康挑战', desc: '查看参与的挑战或发起新挑战', path: '/create-challenge', icon: 'Trophy' },
   { title: '月度摘要', desc: '查看健康数据趋势分析', path: '/monthly-summary', icon: 'DataLine' },
   { title: '搜索记录', desc: '查询历史预约与数据', path: '/search-records', icon: 'Search' },
   { title: '统计功能', desc: '平台热门挑战与排行', path: '/summary-functions', icon: 'PieChart' }
