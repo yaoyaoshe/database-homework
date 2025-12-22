@@ -3,14 +3,37 @@ import request from '@/utils/request'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
-    userId: localStorage.getItem('userId') || null, // 模拟登录状态
+    userId: localStorage.getItem('userId') || null,
+    userName: localStorage.getItem('userName') || '',
+    healthId: localStorage.getItem('healthId') || '',
     userInfo: null
   }),
   actions: {
-    setUserId(id) {
-      this.userId = id
-      localStorage.setItem('userId', id)
+    // 登录动作
+    async login(identifier, password) {
+      try {
+        const res = await request.post('/auth/login', {
+          identifier,
+          password
+        })
+        
+        // 保存登录态
+        this.userId = res.user_id
+        this.userName = res.name
+        this.healthId = res.health_id
+        
+        localStorage.setItem('userId', res.user_id)
+        localStorage.setItem('userName', res.name)
+        localStorage.setItem('healthId', res.health_id)
+        
+        return true
+      } catch (error) {
+        console.error("登录失败", error)
+        throw error
+      }
     },
+    
+    // 获取详细信息
     async fetchUserInfo() {
       if (!this.userId) return
       try {
@@ -20,10 +43,16 @@ export const useUserStore = defineStore('user', {
         console.error(error)
       }
     },
+
     logout() {
       this.userId = null
       this.userInfo = null
+      this.userName = ''
+      this.healthId = ''
+      
       localStorage.removeItem('userId')
+      localStorage.removeItem('userName')
+      localStorage.removeItem('healthId')
     }
   }
 })

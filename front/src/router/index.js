@@ -13,6 +13,11 @@ const router = createRouter({
       component: () => import('../views/AccountInfo.vue') 
     },
     { 
+      path: '/doctor-list', 
+      name: 'DoctorList', 
+      component: () => import('../views/DoctorList.vue') 
+    },
+    { 
       path: '/book-appointment', 
       name: 'BookAppointment', 
       component: () => import('../views/BookAppointment.vue') 
@@ -40,7 +45,6 @@ const router = createRouter({
   ]
 })
 
-// 简单路由守卫
 router.beforeEach((to, from, next) => {
   const userId = localStorage.getItem('userId')
   if (to.name !== 'Login' && !userId) next({ name: 'Login' })

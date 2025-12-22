@@ -93,14 +93,22 @@
 
         <el-tab-pane label="医疗团队">
           <div class="action-bar">
-            <el-input v-model="providerIdInput" placeholder="输入医生 ID 进行关联" style="width: 240px; margin-right: 10px;">
-              <template #prefix><el-icon><FirstAidKit /></el-icon></template>
-            </el-input>
+            <el-input v-model="linkForm.providerId" placeholder="输入医生 ID" style="width: 150px; margin-right: 10px;" />
+            
+            <el-select v-model="linkForm.relation" placeholder="关系类型" style="width: 150px; margin-right: 10px;">
+              <el-option label="家庭医生" value="家庭医生" />
+              <el-option label="主治医生" value="主治医生" />
+              <el-option label="专科顾问" value="专科顾问" />
+            </el-select>
+
             <el-button type="success" @click="linkProvider">关联医生</el-button>
+            <el-button link type="primary" @click="$router.push('/doctor-list')" style="margin-left: auto">
+              去医生库查找 <el-icon><ArrowRight /></el-icon>
+            </el-button>
           </div>
           
           <el-table :data="providerList" border stripe v-loading="loading">
-            <el-table-column prop="name" label="医生姓名" width="100">
+            <el-table-column prop="name" label="医生姓名" width="120">
               <template #default="scope">
                 <strong>{{ scope.row.name }}</strong>
               </template>
@@ -114,17 +122,9 @@
               </template>
             </el-table-column>
 
-            <el-table-column label="科室" width="180">
+            <el-table-column label="科室" width="150">
               <template #default="scope">
                 {{ getContactDetail(scope.row.contact_info, '科室') }}
-              </template>
-            </el-table-column>
-
-            <el-table-column label="工作时间" min-width="200">
-              <template #default="scope">
-                <span style="font-size: 13px; color: #666;">
-                  {{ getContactDetail(scope.row.contact_info, '工作时间') }}
-                </span>
               </template>
             </el-table-column>
 
@@ -138,8 +138,6 @@
               </template>
             </el-table-column>
           </el-table>
-          
-          <el-empty v-if="providerList.length === 0" description="暂未关联任何医生" />
         </el-tab-pane>
 
       </el-tabs>
@@ -158,48 +156,44 @@ const { userInfo } = toRefs(userStore)
 
 const loading = ref(false)
 const saving = ref(false)
-
-// 列表数据
 const emailList = ref([])
 const phoneList = ref([])
-const providerList = ref([]) // 存储已关联医生
+const providerList = ref([])
 
-// 输入框
 const newEmail = ref('')
 const newPhone = ref('')
-const providerIdInput = ref('')
 
-// 编辑表单
+// 关联表单
+const linkForm = reactive({
+  providerId: '',
+  relation: '家庭医生'
+})
+
 const editForm = reactive({
   name: '',
   gender: '',
   date_of_birth: ''
 })
 
-// === 1. 初始化数据 (核心逻辑) ===
 const fetchAllData = async () => {
   if (!userStore.userId) return
   loading.value = true
   try {
-    // 并行请求：用户详情、邮箱、电话、医生列表
     const [userRes, emailRes, phoneRes, provRes] = await Promise.all([
        request.get(`/users/${userStore.userId}`),
        request.get(`/users/${userStore.userId}/emails`),
        request.get(`/users/${userStore.userId}/phones`),
-       request.get(`/users/${userStore.userId}/providers`) // 获取关联列表
+       request.get(`/users/${userStore.userId}/providers`)
     ])
 
-    // 更新 Store 和 表单回显
     userStore.userInfo = userRes
     editForm.name = userRes.name
     editForm.gender = userRes.gender
     editForm.date_of_birth = userRes.date_of_birth ? userRes.date_of_birth.substring(0, 10) : ''
 
-    // 更新列表数据
     emailList.value = emailRes || []
     phoneList.value = phoneRes || []
-    providerList.value = provRes || [] // 赋值医生列表
-
+    providerList.value = provRes || [] 
   } catch(e) {
     console.error(e)
   } finally {
@@ -207,19 +201,17 @@ const fetchAllData = async () => {
   }
 }
 
-// === 2. 个人资料修改 ===
 const handleUpdateProfile = async () => {
   saving.value = true
   try {
     await request.put(`/users/${userStore.userId}`, editForm)
     ElMessage.success('个人资料已更新')
-    fetchAllData() // 刷新数据
+    fetchAllData()
   } catch(e) {} finally {
     saving.value = false
   }
 }
 
-// === 3. 邮箱操作 ===
 const addEmail = async () => {
   if (!newEmail.value) return
   try {
@@ -233,11 +225,10 @@ const deleteEmail = async (id) => {
   try {
     await request.delete(`/users/${userStore.userId}/emails/${id}`)
     ElMessage.success('删除成功')
-    emailList.value = emailList.value.filter(e => e.email_id !== id)
+    fetchAllData()
   } catch(e){}
 }
 
-// === 4. 电话操作 ===
 const addPhone = async () => {
   if (!newPhone.value) return
   try {
@@ -251,30 +242,32 @@ const deletePhone = async (id) => {
    try {
     await request.delete(`/users/${userStore.userId}/phones/${id}`)
     ElMessage.success('删除成功')
-    phoneList.value = phoneList.value.filter(p => p.phone_id !== id)
+    fetchAllData()
   } catch(e){}
 }
 
-// === 5. 医生关联操作 ===
+// 修正后的关联医生逻辑
 const linkProvider = async () => {
-  if (!providerIdInput.value) return ElMessage.warning('请输入医生ID')
+  if (!linkForm.providerId) return ElMessage.warning('请输入医生ID')
   try {
-    // 调用关联接口
-    await request.post(`/users/${userStore.userId}/providers/${providerIdInput.value}`)
+    // 调用后端 POST /users/:id/providers
+    // Body: { provider_id: int, relationship_type: string }
+    await request.post(`/users/${userStore.userId}/providers`, {
+      provider_id: parseInt(linkForm.providerId),
+      relationship_type: linkForm.relation
+    })
     ElMessage.success('关联医生成功')
-    providerIdInput.value = ''
-    // 重新获取列表以显示新关联的医生
-    const res = await request.get(`/users/${userStore.userId}/providers`)
-    providerList.value = res || []
-  } catch(e){}
+    linkForm.providerId = ''
+    fetchAllData()
+  } catch(e) {
+    ElMessage.error(e.response?.data?.error || '关联失败')
+  }
 }
 
 const unlinkProvider = async (pid) => {
   try {
-    // 调用解绑接口
     await request.delete(`/users/${userStore.userId}/providers/${pid}`)
     ElMessage.success('已解除关联')
-    // 前端直接移除，减少请求
     providerList.value = providerList.value.filter(p => p.provider_id !== pid)
   } catch(e) {}
 }
@@ -284,14 +277,12 @@ const formatDate = (dateStr) => {
   return new Date(dateStr).toLocaleDateString()
 }
 
-// === 辅助函数：解析联系方式 JSON ===
 const getContactDetail = (jsonStr, key) => {
   if (!jsonStr) return '-'
   try {
     const obj = JSON.parse(jsonStr)
     return obj[key] || '-'
   } catch (e) {
-    console.error('JSON解析失败', e)
     return '-'
   }
 }
@@ -305,7 +296,6 @@ onMounted(() => {
 .page-container { padding: 20px; }
 .page-header { display: flex; align-items: center; margin-bottom: 24px; }
 .page-header h2 { margin: 0; font-size: 24px; color: #333; }
-
 .profile-header-card {
   background: white;
   padding: 30px;
@@ -316,17 +306,9 @@ onMounted(() => {
   margin-bottom: 24px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.05);
 }
-
 .profile-info h3 { margin: 0 0 8px 0; font-size: 24px; }
 .profile-info p { margin: 0; color: #666; font-size: 16px; }
-
 .main-content-card { min-height: 500px; border-radius: 16px; }
 .action-bar { display: flex; margin-bottom: 20px; align-items: center; background: #f8f9fa; padding: 15px; border-radius: 8px; }
-
-.info-grid { 
-  display: grid; 
-  grid-template-columns: repeat(2, 1fr); 
-  gap: 20px; 
-  padding: 10px; 
-}
+.info-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; padding: 10px; }
 </style>
