@@ -221,7 +221,7 @@ func JoinChallenge(c *gin.Context) {
 	cid, _ := strconv.Atoi(c.Param("id"))
 	var req struct { UserID int `json:"user_id"` }
 	c.ShouldBindJSON(&req)
-	DB.Create(&Participation{ChallengeID: cid, UserID: req.UserID, JoinedAt: time.Now(), Status: "进行中"})
+	DB.Create(&Participation{ChallengeID: cid, UserID: req.UserID, JoinedAt: time.Now(), Status: "参与中"})
 	c.JSON(http.StatusOK, gin.H{"message": "Joined"})
 }
 
