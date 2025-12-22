@@ -15,16 +15,41 @@
           </template>
           
           <el-form :model="form" label-position="top" size="large">
-            <el-form-item label="医生 ID">
-              <el-input-number v-model="form.provider_id" :min="1" style="width: 100%" />
+            
+            <el-form-item label="选择医生" required>
+              <el-select 
+                v-model="form.provider_id" 
+                placeholder="请选择您的医生" 
+                style="width: 100%" 
+                no-data-text="暂无关联医生"
+              >
+                <el-option 
+                  v-for="doc in linkedProviders" 
+                  :key="doc.provider_id" 
+                  :label="doc.name + ' (' + (doc.relationship_type || '医生') + ')'" 
+                  :value="doc.provider_id" 
+                >
+                  <span style="float: left">{{ doc.name }}</span>
+                  <span style="float: right; color: #8492a6; font-size: 13px">{{ doc.specialty }}</span>
+                </el-option>
+              </el-select>
+              
+              <div class="form-helper-link">
+                <span v-if="linkedProviders.length === 0" style="color: #e6a23c; margin-right: 5px;">
+                  <el-icon><Warning /></el-icon> 您尚未关联任何医生
+                </span>
+                <router-link to="/doctor-list">去医生库查找/关联医生 &gt;</router-link>
+              </div>
             </el-form-item>
 
-            <el-form-item label="预约时间">
+            <el-form-item label="预约时间" required>
               <el-date-picker 
                 v-model="form.appointment_date" 
                 type="datetime" 
-                placeholder="选择日期时间" 
+                placeholder="请选择就诊时间" 
                 style="width: 100%"
+                :disabled-date="disabledDate"
+                format="YYYY-MM-DD HH:mm"
               />
             </el-form-item>
 
@@ -40,7 +65,7 @@
               </el-col>
               <el-col :span="12">
                 <el-form-item label="预计时长 (分)">
-                  <el-input-number v-model="form.duration_minutes" :step="15" style="width: 100%" />
+                  <el-input-number v-model="form.duration_minutes" :step="15" :min="15" style="width: 100%" />
                 </el-form-item>
               </el-col>
             </el-row>
@@ -49,7 +74,7 @@
               <el-input v-model="form.reason" type="textarea" :rows="3" placeholder="请简要描述您的症状..." />
             </el-form-item>
 
-            <el-button type="primary" @click="submitAppointment" style="width: 100%; margin-top: 10px;">
+            <el-button type="primary" @click="submitAppointment" style="width: 100%; margin-top: 10px;" :loading="submitting">
               提交预约申请
             </el-button>
           </el-form>
@@ -71,7 +96,7 @@
           </template>
           
           <div v-if="viewMode === 'list'">
-            <el-table :data="appointments" style="width: 100%" height="500">
+            <el-table :data="appointments" style="width: 100%" height="500" v-loading="loading">
               <el-table-column label="时间" min-width="160">
                 <template #default="scope">
                   <div style="display: flex; align-items: center; gap: 8px;">
@@ -81,7 +106,12 @@
                 </template>
               </el-table-column>
               
-              <el-table-column prop="provider_id" label="医生ID" width="80" align="center" />
+              <el-table-column label="医生" width="120">
+                <template #default="scope">
+                  {{ getProviderName(scope.row.provider_id) }}
+                </template>
+              </el-table-column>
+
               <el-table-column prop="consultation_type" label="类型" width="100" />
               
               <el-table-column prop="status" label="状态" width="100">
@@ -104,7 +134,7 @@
                 </template>
               </el-table-column>
             </el-table>
-            <el-empty v-if="appointments.length === 0" description="暂无预约记录" />
+            <el-empty v-if="appointments.length === 0 && !loading" description="暂无预约记录" />
           </div>
 
           <div v-else class="calendar-view">
@@ -120,7 +150,7 @@
                           size="small" 
                           :type="getStatusType(appt.status)" 
                           effect="dark" 
-                          style="margin-top:2px; font-size: 10px; width: 100%; border:none;"
+                          style="margin-top:2px; font-size: 10px; width: 100%; border:none; text-overflow: ellipsis; overflow: hidden;"
                         >
                           {{ appt.consultation_type }}
                         </el-tag>
@@ -146,27 +176,57 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 
 const userStore = useUserStore()
 const appointments = ref([])
-const viewMode = ref('list') // 控制默认视图
+const linkedProviders = ref([]) // 存储已关联的医生列表
+const viewMode = ref('list') 
+const loading = ref(false)
+const submitting = ref(false)
 
 const form = reactive({
-  provider_id: 1,
+  provider_id: null,
   appointment_date: '',
   consultation_type: '线下就诊',
   reason: '',
   duration_minutes: 30
 })
 
+// 初始化数据
+const initData = async () => {
+  if (!userStore.userId) return
+  loading.value = true
+  await Promise.all([fetchAppointments(), fetchLinkedProviders()])
+  loading.value = false
+}
+
+// 获取我的预约
 const fetchAppointments = async () => {
   try {
     const res = await request.get(`/users/${userStore.userId}/appointments`)
-    appointments.value = res || [] // 确保是数组
+    appointments.value = res || []
   } catch(e) {
     appointments.value = []
   }
 }
 
+// 🆕 获取已关联的医生
+const fetchLinkedProviders = async () => {
+  try {
+    const res = await request.get(`/users/${userStore.userId}/providers`)
+    linkedProviders.value = res || []
+    
+    // 如果有关联医生且当前表单未选，默认选中第一个
+    if (linkedProviders.value.length > 0 && !form.provider_id) {
+      form.provider_id = linkedProviders.value[0].provider_id
+    }
+  } catch(e) {
+    console.error('获取关联医生失败', e)
+  }
+}
+
 const submitAppointment = async () => {
+  if (!form.provider_id) return ElMessage.warning('请选择医生')
   if (!form.appointment_date) return ElMessage.warning('请选择时间')
+  
+  submitting.value = true
   const rfcDate = new Date(form.appointment_date).toISOString()
   try {
     await request.post('/appointments', {
@@ -178,8 +238,15 @@ const submitAppointment = async () => {
       reason: form.reason
     })
     ElMessage.success('预约成功')
+    // 重置部分表单
+    form.reason = ''
+    form.appointment_date = ''
     fetchAppointments()
-  } catch(e) {}
+  } catch(e) {
+    ElMessage.error(e.response?.data?.error || '预约失败')
+  } finally {
+    submitting.value = false
+  }
 }
 
 const cancelAppt = (id) => {
@@ -194,9 +261,15 @@ const cancelAppt = (id) => {
   })
 }
 
+// 辅助函数：通过ID反查医生姓名
+const getProviderName = (pid) => {
+  const doc = linkedProviders.value.find(p => p.provider_id === pid)
+  return doc ? doc.name : `ID: ${pid}`
+}
+
 const formatTime = (t) => {
   if(!t) return ''
-  return new Date(t).toLocaleString()
+  return new Date(t).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 const getStatusType = (status) => {
@@ -206,16 +279,18 @@ const getStatusType = (status) => {
   return 'warning'
 }
 
-// 日历辅助函数：筛选特定日期的预约
+const disabledDate = (time) => {
+  return time.getTime() < Date.now() - 8.64e7 // 禁止选择今天之前的日期
+}
+
 const getApptOnDay = (dateStr) => {
   return appointments.value.filter(appt => {
     if (!appt.appointment_date) return false
-    // 截取 YYYY-MM-DD
     return appt.appointment_date.substring(0, 10) === dateStr
   })
 }
 
-onMounted(fetchAppointments)
+onMounted(initData)
 </script>
 
 <style scoped>
@@ -238,6 +313,22 @@ onMounted(fetchAppointments)
   gap: 8px; 
 }
 .form-card { border-top: 4px solid #007bff !important; }
+
+/* 引导链接样式 */
+.form-helper-link {
+  margin-top: 6px;
+  font-size: 13px;
+  text-align: right;
+}
+.form-helper-link a {
+  color: #409eff;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.form-helper-link a:hover {
+  color: #66b1ff;
+  text-decoration: underline;
+}
 
 /* 日历样式优化 */
 .calendar-view :deep(.el-calendar-table .el-calendar-day) {
@@ -262,7 +353,6 @@ onMounted(fetchAppointments)
   flex: 1;
   overflow-y: auto;
 }
-/* 隐藏滚动条但允许滚动 */
 .appt-list-scroll::-webkit-scrollbar {
   display: none; 
 }
