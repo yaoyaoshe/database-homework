@@ -2,7 +2,7 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
 const service = axios.create({
-  baseURL: 'http://localhost:8080/api', // 对应 main.go 中的端口
+  baseURL: 'http://localhost:8080/api', // 对应 Go 后端地址
   timeout: 5000
 })
 
@@ -12,8 +12,9 @@ service.interceptors.response.use(
     return response.data
   },
   error => {
-    console.error('API Error:', error)
-    ElMessage.error(error.response?.data?.error || '请求失败，请检查后端服务')
+    console.error('Request Error:', error)
+    const msg = error.response?.data?.error || '请求失败'
+    ElMessage.error(msg)
     return Promise.reject(error)
   }
 )

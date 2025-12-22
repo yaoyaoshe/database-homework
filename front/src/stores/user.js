@@ -3,22 +3,17 @@ import { ref } from 'vue'
 
 export const useUserStore = defineStore('user', () => {
   // 从 localStorage 初始化，防止刷新丢失
-  const userInfo = ref(JSON.parse(localStorage.getItem('health_user') || '{}'))
-  const userId = ref(localStorage.getItem('health_uid') || '')
+  const userInfo = ref(JSON.parse(localStorage.getItem('ht_user') || '{}'))
 
-  function login(data) {
-    userInfo.value = data
-    userId.value = data.user_id
-    localStorage.setItem('health_user', JSON.stringify(data))
-    localStorage.setItem('health_uid', data.user_id)
+  const setUser = (user) => {
+    userInfo.value = user
+    localStorage.setItem('ht_user', JSON.stringify(user))
   }
 
-  function logout() {
+  const logout = () => {
     userInfo.value = {}
-    userId.value = ''
-    localStorage.removeItem('health_user')
-    localStorage.removeItem('health_uid')
+    localStorage.removeItem('ht_user')
   }
 
-  return { userInfo, userId, login, logout }
+  return { userInfo, setUser, logout }
 })

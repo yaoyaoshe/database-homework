@@ -1,34 +1,56 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useUserStore } from '../stores/user'
+import { useUserStore } from '@/stores/user'
+import Layout from '@/views/Layout.vue'
+import Login from '@/views/Login.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     {
       path: '/login',
-      name: 'login',
-      component: () => import('../views/Login.vue')
+      name: 'Login',
+      component: Login
+    },
+    {
+      path: '/register',
+      name: 'Register',
+      component: () => import('@/views/Register.vue')
     },
     {
       path: '/',
-      component: () => import('../views/Layout.vue'),
-      redirect: '/dashboard',
+      component: Layout,
+      redirect: '/appointments',
       children: [
-        { path: 'dashboard', component: () => import('../views/Dashboard.vue'), name: 'Dashboard' },
-        { path: 'appointments', component: () => import('../views/Appointment.vue'), name: 'Appointments' },
-        { path: 'providers', component: () => import('../views/Provider.vue'), name: 'Providers' },
-        { path: 'challenges', component: () => import('../views/Challenge.vue'), name: 'Challenges' },
-        { path: 'reports', component: () => import('../views/Report.vue'), name: 'Reports' }
+        {
+          path: 'appointments',
+          name: 'Appointments',
+          component: () => import('@/views/appointment/AppointmentManager.vue')
+        },
+        {
+          path: 'providers',
+          name: 'Providers',
+          component: () => import('@/views/provider/ProviderList.vue')
+        },
+        {
+          path: 'challenges',
+          name: 'Challenges',
+          component: () => import('@/views/challenge/ChallengeCenter.vue')
+        },
+        {
+          path: 'reports',
+          name: 'Reports',
+          component: () => import('@/views/report/MonthlyReport.vue')
+        }
       ]
     }
   ]
 })
 
-// 路由守卫：未登录跳转到登录页
+// 路由守卫
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore()
-  if (to.name !== 'login' && !userStore.userId) {
-    next({ name: 'login' })
+  if (to.name !== 'Login' && to.name !== 'Register' && !userStore.userInfo.user_id) {
+    next({ name: 'Login' })
   } else {
     next()
   }
