@@ -59,13 +59,27 @@ const rules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
 
+// SHA-256 加密工具函数
+const sha256 = async (message) => {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
+
 const handleLogin = async () => {
   if (!formRef.value) return
   await formRef.value.validate(async (valid) => {
     if (valid) {
       loading.value = true
       try {
-        await userStore.login(form.identifier, form.password)
+        // 在发送前对密码进行哈希处理
+        const hashedPassword = await sha256(form.password)
+        
+        // 发送哈希后的密码
+        await userStore.login(form.identifier, hashedPassword)
+        
         ElMessage.success(`欢迎回来, ${userStore.userName}`)
         router.push('/')
       } catch (error) {

@@ -56,6 +56,7 @@
             </el-input>
             <el-button type="primary" @click="addEmail">添加邮箱</el-button>
           </div>
+          <el-alert title="注意：后端未提供邮箱列表查询接口，刷新后列表将重置。" type="info" show-icon :closable="false" style="margin-bottom: 10px;" />
           <el-table :data="emailList" border stripe>
             <el-table-column prop="email_address" label="邮箱地址" />
             <el-table-column prop="is_verified" label="状态" width="100">
@@ -80,6 +81,7 @@
             </el-input>
             <el-button type="primary" @click="addPhone">添加电话</el-button>
           </div>
+          <el-alert title="注意：后端未提供电话列表查询接口，刷新后列表将重置。" type="info" show-icon :closable="false" style="margin-bottom: 10px;" />
            <el-table :data="phoneList" border stripe>
             <el-table-column prop="phone_number" label="电话号码" />
             <el-table-column prop="phone_type" label="类型" width="100" />
@@ -116,7 +118,7 @@
             
             <el-table-column prop="specialty" label="专业领域" width="120" />
             
-            <el-table-column prop="relationship_type" label="关系类型" width="100">
+            <el-table-column prop="relationship_type" label="关系类型" width="120">
               <template #default="scope">
                 <el-tag effect="plain">{{ scope.row.relationship_type || '未设置' }}</el-tag>
               </template>
@@ -159,6 +161,7 @@ const saving = ref(false)
 const emailList = ref([])
 const phoneList = ref([])
 const providerList = ref([])
+const allProvidersCache = ref([]) // 缓存所有医生列表，用于前端匹配
 
 const newEmail = ref('')
 const newPhone = ref('')
@@ -179,23 +182,41 @@ const fetchAllData = async () => {
   if (!userStore.userId) return
   loading.value = true
   try {
-    const [userRes, emailRes, phoneRes, provRes] = await Promise.all([
-       request.get(`/users/${userStore.userId}`),
-       request.get(`/users/${userStore.userId}/emails`),
-       request.get(`/users/${userStore.userId}/phones`),
-       request.get(`/users/${userStore.userId}/providers`)
-    ])
-
+    // 修改：仅调用后端实际存在的接口，避免 404
+    // 1. 获取用户信息
+    const userRes = await request.get(`/users/${userStore.userId}`)
     userStore.userInfo = userRes
     editForm.name = userRes.name
     editForm.gender = userRes.gender
     editForm.date_of_birth = userRes.date_of_birth ? userRes.date_of_birth.substring(0, 10) : ''
 
-    emailList.value = emailRes || []
-    phoneList.value = phoneRes || []
-    providerList.value = provRes || [] 
+    // 2. 初始化列表为空 (因为后端没有提供查询接口)
+    emailList.value = []
+    phoneList.value = []
+    providerList.value = []
+
+    // 3. 尝试获取所有医生列表，并根据用户的 primary_provider_id 模拟显示主治医生
+    try {
+      const allProviders = await request.get('/providers')
+      allProvidersCache.value = allProviders // 缓存以备后用
+      
+      if (userRes.primary_provider_id) {
+        const primary = allProviders.find(p => p.provider_id === userRes.primary_provider_id)
+        if (primary) {
+          // 手动添加关系类型，模拟关联数据
+          providerList.value.push({
+            ...primary,
+            relationship_type: '主治医生 (Primary)'
+          })
+        }
+      }
+    } catch (err) {
+      console.error('无法获取医生列表', err)
+    }
+
   } catch(e) {
     console.error(e)
+    ElMessage.error('加载用户信息失败')
   } finally {
     loading.value = false
   }
@@ -215,50 +236,71 @@ const handleUpdateProfile = async () => {
 const addEmail = async () => {
   if (!newEmail.value) return
   try {
-    await request.post(`/users/${userStore.userId}/emails`, { email: newEmail.value })
+    // 调用 POST 接口 (存在)
+    const res = await request.post(`/users/${userStore.userId}/emails`, { email: newEmail.value })
     ElMessage.success('邮箱添加成功')
+    // 手动添加到本地列表显示，因为无法重新拉取
+    emailList.value.push(res)
     newEmail.value = ''
-    fetchAllData()
   } catch(e){}
 }
 const deleteEmail = async (id) => {
   try {
     await request.delete(`/users/${userStore.userId}/emails/${id}`)
     ElMessage.success('删除成功')
-    fetchAllData()
+    // 手动从本地列表移除
+    emailList.value = emailList.value.filter(e => e.email_id !== id)
   } catch(e){}
 }
 
 const addPhone = async () => {
   if (!newPhone.value) return
   try {
-    await request.post(`/users/${userStore.userId}/phones`, { phone: newPhone.value })
+    // 调用 POST 接口 (存在)
+    const res = await request.post(`/users/${userStore.userId}/phones`, { phone: newPhone.value })
     ElMessage.success('电话添加成功')
+    // 手动添加到本地列表显示
+    phoneList.value.push(res)
     newPhone.value = ''
-    fetchAllData()
   } catch(e){}
 }
 const deletePhone = async (id) => {
    try {
     await request.delete(`/users/${userStore.userId}/phones/${id}`)
     ElMessage.success('删除成功')
-    fetchAllData()
+    // 手动从本地列表移除
+    phoneList.value = phoneList.value.filter(p => p.phone_id !== id)
   } catch(e){}
 }
 
-// 修正后的关联医生逻辑
 const linkProvider = async () => {
   if (!linkForm.providerId) return ElMessage.warning('请输入医生ID')
   try {
-    // 调用后端 POST /users/:id/providers
-    // Body: { provider_id: int, relationship_type: string }
+    const pid = parseInt(linkForm.providerId)
+    // 1. 调用后端关联接口
     await request.post(`/users/${userStore.userId}/providers`, {
-      provider_id: parseInt(linkForm.providerId),
+      provider_id: pid,
       relationship_type: linkForm.relation
     })
     ElMessage.success('关联医生成功')
+    
+    // 2. 尝试从缓存的所有医生中找到详细信息并添加到列表
+    const providerDetail = allProvidersCache.value.find(p => p.provider_id === pid)
+    if (providerDetail) {
+      // 检查是否已存在
+      const exists = providerList.value.find(p => p.provider_id === pid)
+      if (!exists) {
+        providerList.value.push({
+          ...providerDetail,
+          relationship_type: linkForm.relation
+        })
+      }
+    } else {
+      // 如果找不到详情，刷新页面(虽然只会显示主治医生)
+      fetchAllData()
+    }
+    
     linkForm.providerId = ''
-    fetchAllData()
   } catch(e) {
     ElMessage.error(e.response?.data?.error || '关联失败')
   }
