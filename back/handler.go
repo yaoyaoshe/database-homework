@@ -26,14 +26,17 @@ func RegisterRoutes(r *gin.Engine) {
 
         // Email / Phone
         api.POST("/users/:id/emails", AddEmail)
+        api.GET("/users/:id/emails", GetUserEmails)       // 🆕 新增：获取邮箱列表
         api.DELETE("/users/:id/emails/:emailid", DeleteEmail)
+        
         api.POST("/users/:id/phones", AddPhone)
+        api.GET("/users/:id/phones", GetUserPhones)       // 🆕 新增：获取电话列表
         api.DELETE("/users/:id/phones/:phoneid", DeletePhone)
 
         // Providers
         api.GET("/providers", ListProviders)
-        //api.POST("/users/:id/providers/:provider_id", LinkProvider)
         api.POST("/users/:id/providers", LinkProvider)
+        api.GET("/users/:id/providers", GetUserProviders) // 🆕 新增：获取已关联医生
         api.DELETE("/users/:id/providers/:provider_id", UnlinkProvider)
 
         // Appointments
@@ -46,8 +49,6 @@ func RegisterRoutes(r *gin.Engine) {
         api.POST("/challenges/:id/invite", InviteToChallenge)
         api.POST("/challenges/:id/join", JoinChallenge)
         api.GET("/challenges/:id/participants", GetChallengeParticipants)
-        
-        // 🆕 新增：获取用户参与的挑战列表 (修复接口不适配问题)
         api.GET("/users/:id/challenges", GetUserChallenges)
 
         // Reports / Stored Procs
@@ -76,21 +77,18 @@ func Login(c *gin.Context) {
     var err error
 
     // 1️⃣ 先按 health_id 查
-    err = DB.Where("health_id = ?", in.Identifier).
-        First(&user).Error
+    err = DB.Where("health_id = ?", in.Identifier).First(&user).Error
 
     // 2️⃣ 如果没找到，用已验证邮箱查
     if err != nil {
-        err = DB.
-            Joins("JOIN Email e ON e.user_id = User.user_id").
+        err = DB.Joins("JOIN Email e ON e.user_id = User.user_id").
             Where("e.email_address = ?", in.Identifier).
             First(&user).Error
     }
 
     // 3️⃣ 如果还没找到，用已验证手机号查
     if err != nil {
-        err = DB.
-            Joins("JOIN UserPhone p ON p.user_id = User.user_id").
+        err = DB.Joins("JOIN UserPhone p ON p.user_id = User.user_id").
             Where("p.phone_number = ?", in.Identifier).
             First(&user).Error
     }
@@ -102,7 +100,6 @@ func Login(c *gin.Context) {
     
     // 密码校验 (兼容前端传来的 SHA256 哈希)
     if user.PasswordHash != in.Password {
-        // 如果前端没加密，这里也可以尝试再次对比 (可选)
          hash := sha256.Sum256([]byte(in.Password))
          hashedInput := hex.EncodeToString(hash[:])
          if user.PasswordHash != hashedInput {
@@ -118,9 +115,6 @@ func Login(c *gin.Context) {
     })
 }
 
-
-
-// CreateUser 简化示例（注意生产需密码哈希）
 func CreateUser(c *gin.Context) {
     var in struct {
         HealthID string `json:"health_id" binding:"required"`
@@ -139,7 +133,6 @@ func CreateUser(c *gin.Context) {
         if err == nil { dob = &t }
     }
     
-    // 简单的 SHA256 加密存储，与前端一致
     hash := sha256.Sum256([]byte(in.Password))
     hashedPassword := hex.EncodeToString(hash[:])
 
@@ -171,6 +164,17 @@ func GetUser(c *gin.Context) {
     c.JSON(http.StatusOK, u)
 }
 
+// 🆕 获取用户的邮箱列表
+func GetUserEmails(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var emails []Email
+    if err := DB.Where("user_id = ?", uid).Find(&emails).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusOK, emails)
+}
+
 func AddEmail(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
     var in struct { Email string `json:"email" binding:"required,email"` }
@@ -190,6 +194,17 @@ func DeleteEmail(c *gin.Context) {
         return
     }
     c.Status(http.StatusNoContent)
+}
+
+// 🆕 获取用户的电话列表
+func GetUserPhones(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var phones []UserPhone
+    if err := DB.Where("user_id = ?", uid).Find(&phones).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusOK, phones)
 }
 
 func AddPhone(c *gin.Context) {
@@ -212,7 +227,6 @@ func DeletePhone(c *gin.Context) {
 
 func ListProviders(c *gin.Context) {
     var providers []Provider
-
     q := DB.Model(&Provider{})
     if s := c.Query("specialty"); s != "" {
         q = q.Where("specialty = ?", s)
@@ -220,11 +234,40 @@ func ListProviders(c *gin.Context) {
     if c.Query("verified") == "true" {
         q = q.Where("is_verified = true")
     }
-
     q.Find(&providers)
     c.JSON(200, providers)
 }
 
+// 🆕 获取用户关联的医生列表
+func GetUserProviders(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    
+    // 定义返回结构
+    type LinkedProvider struct {
+        ProviderID       int       `json:"provider_id"`
+        Name             string    `json:"name"`
+        Specialty        string    `json:"specialty"`
+        ContactInfo      string    `json:"contact_info"`
+        RelationshipType string    `json:"relationship_type"`
+        LinkDate         time.Time `json:"link_date"`
+    }
+
+    var result []LinkedProvider
+
+    // 联表查询
+    err := DB.Table("Provider").
+        Select("Provider.provider_id, Provider.name, Provider.specialty, Provider.contact_info, UserProvider.relationship_type, UserProvider.link_date").
+        Joins("JOIN UserProvider ON UserProvider.provider_id = Provider.provider_id").
+        Where("UserProvider.user_id = ?", uid).
+        Scan(&result).Error
+
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+
+    c.JSON(http.StatusOK, result)
+}
 
 func LinkProvider(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
@@ -252,7 +295,6 @@ func LinkProvider(c *gin.Context) {
     c.JSON(201, up)
 }
 
-
 func UnlinkProvider(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
     pid, _ := strconv.Atoi(c.Param("provider_id"))
@@ -267,7 +309,7 @@ func CreateAppointment(c *gin.Context) {
     var in struct {
         UserID          int    `json:"user_id" binding:"required"`
         ProviderID      int    `json:"provider_id" binding:"required"`
-        AppointmentDate string `json:"appointment_date" binding:"required"` // RFC3339
+        AppointmentDate string `json:"appointment_date" binding:"required"`
         DurationMinutes int    `json:"duration_minutes"`
         ConsultationType string `json:"consultation_type"`
         Reason          string `json:"reason"`
@@ -302,7 +344,6 @@ func CancelAppointment(c *gin.Context) {
     if err := DB.First(&appt, "appointment_id = ?", id).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error":"appointment not found"}); return
     }
-    // 应用层检查：必须在 24 小时前取消
     if time.Until(appt.AppointmentDate) < 24*time.Hour {
         c.JSON(http.StatusForbidden, gin.H{"error":"无法在预约时间24小时内取消预约"})
         return
@@ -325,36 +366,27 @@ func GetUserAppointments(c *gin.Context) {
     c.JSON(http.StatusOK, appts)
 }
 
-// 🆕 获取用户参与的挑战列表（包含挑战详情和个人进度）
 func GetUserChallenges(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
-
-    // 定义返回结构，适配前端 CreateChallenge.vue 的需求
     type UserChallengeResponse struct {
         ChallengeID     int     `json:"challenge_id"`
         ChallengeName   string  `json:"challenge_name"`
         Description     string  `json:"description"`
-        Status          string  `json:"status"`            // 用户的参与状态
+        Status          string  `json:"status"`
         CurrentProgress float64 `json:"current_progress"`
         TargetValue     float64 `json:"target_value"`
         TargetUnit      string  `json:"target_unit"`
-        // 其他前端可能需要的字段
     }
-
     var results []UserChallengeResponse
-
-    // 联表查询：Participation LEFT JOIN Challenge
     err := DB.Table("Participation").
         Select("Participation.challenge_id, Challenge.challenge_name, Challenge.description, Participation.status, Participation.current_progress, Challenge.target_value, Challenge.target_unit").
         Joins("JOIN Challenge ON Challenge.challenge_id = Participation.challenge_id").
         Where("Participation.user_id = ?", uid).
         Scan(&results).Error
-
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
     }
-
     c.JSON(http.StatusOK, results)
 }
 
@@ -367,15 +399,14 @@ func CreateChallenge(c *gin.Context) {
         TargetMetric  string `json:"target_metric"`
         TargetValue   float64 `json:"target_value"`
         TargetUnit    string  `json:"target_unit"`
-        StartDate string `json:"start_date" binding:"required"` // YYYY-MM-DD
+        StartDate string `json:"start_date" binding:"required"`
         EndDate   string `json:"end_date" binding:"required"`
         MaxParticipants int `json:"max_participants"`
         IsPublic bool `json:"is_public"`
     }
     if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
-    sd, err := time.Parse("2006-01-02", in.StartDate) // 后端应处理 ISO8601 或 Simple Date
+    sd, err := time.Parse("2006-01-02", in.StartDate)
     if err != nil { 
-         // 尝试解析 RFC3339 格式 (2025-07-01T00:00:00Z)
          t, e2 := time.Parse(time.RFC3339, in.StartDate)
          if e2 != nil {
              c.JSON(http.StatusBadRequest, gin.H{"error":"bad start date"}); return 
@@ -417,7 +448,7 @@ func InviteToChallenge(c *gin.Context) {
     cid, _ := strconv.Atoi(c.Param("id"))
     var in struct {
         SenderID int `json:"sender_id" binding:"required"`
-        RecipientType string `json:"recipient_type" binding:"required"` // 邮箱/手机号/用户ID
+        RecipientType string `json:"recipient_type" binding:"required"`
         RecipientValue string `json:"recipient_value" binding:"required"`
         Message string `json:"message"`
     }
@@ -476,11 +507,10 @@ type MonthlyReportResponse struct {
     GeneratedAt           time.Time       `json:"generated_at"`
 }
 
-
 func GenerateMonthlyReport(c *gin.Context) {
     var in struct {
         UserID int    `json:"user_id" binding:"required"`
-        Month  string `json:"month" binding:"required"` // YYYY-MM-01
+        Month  string `json:"month" binding:"required"`
     }
 
     if err := c.ShouldBindJSON(&in); err != nil {
@@ -488,19 +518,11 @@ func GenerateMonthlyReport(c *gin.Context) {
         return
     }
 
-    // ✅ 1. 调用存储过程（生成或确认存在）
-    if err := DB.Exec(
-        "CALL GenerateMonthlyReport(?, ?)",
-        in.UserID,
-        in.Month,
-    ).Error; err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{
-            "error": "生成月度报表失败: " + err.Error(),
-        })
+    if err := DB.Exec("CALL GenerateMonthlyReport(?, ?)", in.UserID, in.Month).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "生成月度报表失败: " + err.Error()})
         return
     }
 
-    // ✅ 2. 查询 MonthlyReport 表
     var report MonthlyReportResponse
     err := DB.Raw(`
         SELECT 
@@ -519,22 +541,17 @@ func GenerateMonthlyReport(c *gin.Context) {
     `, in.UserID, in.Month).Scan(&report).Error
 
     if err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{
-            "error": "读取月度报表失败: " + err.Error(),
-        })
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "读取月度报表失败: " + err.Error()})
         return
     }
 
-    // ✅ 3. 返回真正的报表
     c.JSON(http.StatusOK, report)
 }
-
 
 func MostPopularChallenges(c *gin.Context) {
     limitStr := c.Query("limit")
     if limitStr == "" { limitStr = "5" }
     limit, _ := strconv.Atoi(limitStr)
-    // 调用存储过程 FindMostPopularChallenges
     type Row struct {
         ChallengeID    int     `json:"challenge_id"`
         ChallengeName  string  `json:"challenge_name"`
@@ -584,16 +601,14 @@ type ChallengeDailyProgress struct {
     RecordedAt    time.Time `gorm:"column:recorded_at"`
 }
 
-func (ChallengeDailyProgress) TableName() string {
-    return "ChallengeDailyProgress"
-}
+func (ChallengeDailyProgress) TableName() string { return "ChallengeDailyProgress" }
 
 func CheckinChallenge(c *gin.Context) {
     challengeID, _ := strconv.Atoi(c.Param("id"))
 
     var in struct {
         UserID        int     `json:"user_id" binding:"required"`
-        Date          string  `json:"date" binding:"required"` // YYYY-MM-DD
+        Date          string  `json:"date" binding:"required"`
         ProgressValue float64 `json:"progress_value" binding:"required"`
         ProgressUnit  string  `json:"progress_unit"`
         IsCompleted   bool    `json:"is_completed"`
@@ -611,7 +626,6 @@ func CheckinChallenge(c *gin.Context) {
         return
     }
 
-    // 1️⃣ 防止重复打卡（唯一索引兜底）
     record := ChallengeDailyProgress{
         ChallengeID:   challengeID,
         UserID:        in.UserID,
@@ -621,19 +635,14 @@ func CheckinChallenge(c *gin.Context) {
         IsCompleted:   in.IsCompleted,
         RecordedAt:    time.Now(),
     }
-
-    if in.Notes != "" {
-        record.Notes = &in.Notes
-    }
+    if in.Notes != "" { record.Notes = &in.Notes }
 
     if err := DB.Create(&record).Error; err != nil {
-        c.JSON(http.StatusBadRequest, gin.H{
-            "error": "今日已打卡或数据错误：" + err.Error(),
-        })
+        c.JSON(http.StatusBadRequest, gin.H{"error": "今日已打卡或数据错误：" + err.Error()})
         return
     }
 
-    // 2️⃣ 同步更新 Participation 累计进度
+    // 同步更新 Participation
     if err := DB.Exec(`
         UPDATE Participation
         SET 
@@ -647,48 +656,29 @@ func CheckinChallenge(c *gin.Context) {
             END
         WHERE challenge_id = ? AND user_id = ?
     `, in.ProgressValue, in.ProgressValue, challengeID, challengeID, in.UserID).Error; err != nil {
-
-        c.JSON(http.StatusInternalServerError, gin.H{
-            "error": "更新累计进度失败：" + err.Error(),
-        })
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "更新累计进度失败：" + err.Error()})
         return
     }
 
-    c.JSON(http.StatusCreated, gin.H{
-        "message": "打卡成功",
-        "data": record,
-    })
+    c.JSON(http.StatusCreated, gin.H{"message": "打卡成功", "data": record})
 }
 
 func GetChallengeDailyProgress(c *gin.Context) {
     challengeID, _ := strconv.Atoi(c.Param("id"))
     userID, _ := strconv.Atoi(c.Query("user_id"))
-
     var records []ChallengeDailyProgress
-
-    DB.Where(
-        "challenge_id = ? AND user_id = ?",
-        challengeID, userID,
-    ).Order("progress_date asc").Find(&records)
-
+    DB.Where("challenge_id = ? AND user_id = ?", challengeID, userID).Order("progress_date asc").Find(&records)
     c.JSON(http.StatusOK, records)
 }
 
 func GetChallengeSummary(c *gin.Context) {
     challengeID, _ := strconv.Atoi(c.Param("id"))
     userID, _ := strconv.Atoi(c.Query("user_id"))
-
     var p Participation
-    if err := DB.First(
-        &p,
-        "challenge_id = ? AND user_id = ?",
-        challengeID, userID,
-    ).Error; err != nil {
-
+    if err := DB.First(&p, "challenge_id = ? AND user_id = ?", challengeID, userID).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error": "未找到参与记录"})
         return
     }
-
     c.JSON(http.StatusOK, gin.H{
         "challenge_id":    challengeID,
         "user_id":         userID,
