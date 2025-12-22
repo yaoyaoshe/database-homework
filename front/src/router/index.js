@@ -1,50 +1,37 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import LoginView from '../views/LoginView.vue'
-import MainMenu from '../views/MainMenu.vue'
+import { useUserStore } from '../stores/user'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    { path: '/login', name: 'Login', component: LoginView },
-    { path: '/', name: 'MainMenu', component: MainMenu },
-    { 
-      path: '/account-info', 
-      name: 'AccountInfo', 
-      component: () => import('../views/AccountInfo.vue') 
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('../views/Login.vue')
     },
-    { 
-      path: '/book-appointment', 
-      name: 'BookAppointment', 
-      component: () => import('../views/BookAppointment.vue') 
-    },
-    { 
-      path: '/create-challenge', 
-      name: 'CreateChallenge', 
-      component: () => import('../views/CreateChallenge.vue') 
-    },
-    { 
-      path: '/monthly-summary', 
-      name: 'MonthlySummary', 
-      component: () => import('../views/MonthlySummary.vue') 
-    },
-    { 
-      path: '/search-records', 
-      name: 'SearchRecords', 
-      component: () => import('../views/SearchRecords.vue') 
-    },
-    { 
-      path: '/summary-functions', 
-      name: 'SummaryFunctions', 
-      component: () => import('../views/SummaryFunctions.vue') 
+    {
+      path: '/',
+      component: () => import('../views/Layout.vue'),
+      redirect: '/dashboard',
+      children: [
+        { path: 'dashboard', component: () => import('../views/Dashboard.vue'), name: 'Dashboard' },
+        { path: 'appointments', component: () => import('../views/Appointment.vue'), name: 'Appointments' },
+        { path: 'providers', component: () => import('../views/Provider.vue'), name: 'Providers' },
+        { path: 'challenges', component: () => import('../views/Challenge.vue'), name: 'Challenges' },
+        { path: 'reports', component: () => import('../views/Report.vue'), name: 'Reports' }
+      ]
     }
   ]
 })
 
-// 简单路由守卫
+// 路由守卫：未登录跳转到登录页
 router.beforeEach((to, from, next) => {
-  const userId = localStorage.getItem('userId')
-  if (to.name !== 'Login' && !userId) next({ name: 'Login' })
-  else next()
+  const userStore = useUserStore()
+  if (to.name !== 'login' && !userStore.userId) {
+    next({ name: 'login' })
+  } else {
+    next()
+  }
 })
 
 export default router
