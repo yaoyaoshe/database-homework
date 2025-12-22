@@ -123,10 +123,43 @@ func DeletePhone(c *gin.Context) {
 }
 
 func GetUserProviders(c *gin.Context) {
-	var p []Provider
-	DB.Raw("SELECT p.* FROM Provider p JOIN UserProviders up ON p.provider_id=up.provider_id WHERE up.user_id=?", c.Param("id")).Scan(&p)
-	c.JSON(http.StatusOK, p)
+	// 定义一个临时的响应结构体，包含医生信息 + 关系类型
+	type ProviderWithRel struct {
+		ProviderID       int     `json:"provider_id"`
+		Name             string  `json:"name"`
+		Specialty        string  `json:"specialty"`
+		ContactInfo      *string `json:"contact_info"`
+		RelationshipType string  `json:"relationship_type"` // 关键：添加这个字段接收 UserProvider 表的数据
+	}
+
+	var list []ProviderWithRel
+
+	// 修改 SQL：显式查询 Provider 表的字段 和 UserProvider 表的 relationship_type
+	err := DB.Raw(`
+		SELECT 
+			p.provider_id, 
+			p.name, 
+			p.specialty, 
+			p.contact_info, 
+			up.relationship_type
+		FROM UserProvider up
+		JOIN Provider p ON up.provider_id = p.provider_id
+		WHERE up.user_id = ?
+	`, c.Param("id")).Scan(&list).Error
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, list)
 }
+
+// func GetUserProviders(c *gin.Context) {
+// 	var p []Provider
+// 	DB.Raw("SELECT p.* FROM Provider p JOIN UserProvider up ON p.provider_id=up.provider_id WHERE up.user_id=?", c.Param("id")).Scan(&p)
+// 	c.JSON(http.StatusOK, p)
+// }
 
 func LinkProvider(c *gin.Context) {
 	uid, _ := strconv.Atoi(c.Param("id"))

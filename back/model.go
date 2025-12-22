@@ -36,7 +36,7 @@ type Email struct {
 	EmailAddress string `gorm:"column:email_address" json:"email_address"`
 	IsVerified   bool   `gorm:"column:is_verified" json:"is_verified"`
 }
-func (Email) TableName() string { return "Emails" }
+func (Email) TableName() string { return "Email" }
 
 // PhoneNumber 电话表
 type PhoneNumber struct {
@@ -46,7 +46,7 @@ type PhoneNumber struct {
 	PhoneType   string `gorm:"column:phone_type" json:"phone_type"`
 	IsVerified  bool   `gorm:"column:is_verified" json:"is_verified"`
 }
-func (PhoneNumber) TableName() string { return "PhoneNumbers" }
+func (PhoneNumber) TableName() string { return "UserPhone" }
 
 // UserProvider 关联表
 type UserProvider struct {
@@ -54,7 +54,7 @@ type UserProvider struct {
 	ProviderID int       `gorm:"column:provider_id;primaryKey"`
 	LinkDate   time.Time `gorm:"column:link_date"`
 }
-func (UserProvider) TableName() string { return "UserProviders" }
+func (UserProvider) TableName() string { return "UserProvider" }
 
 // Appointment 预约表
 type Appointment struct {
