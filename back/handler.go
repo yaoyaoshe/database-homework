@@ -4,6 +4,9 @@ import (
     "net/http"
     "time"
     "strconv"
+    // "fmt" // 如果需要打印日志可取消注释
+    "crypto/sha256"
+    "encoding/hex"
 
     "github.com/gin-gonic/gin"
     "gorm.io/gorm"
@@ -43,6 +46,9 @@ func RegisterRoutes(r *gin.Engine) {
         api.POST("/challenges/:id/invite", InviteToChallenge)
         api.POST("/challenges/:id/join", JoinChallenge)
         api.GET("/challenges/:id/participants", GetChallengeParticipants)
+        
+        // 🆕 新增：获取用户参与的挑战列表 (修复接口不适配问题)
+        api.GET("/users/:id/challenges", GetUserChallenges)
 
         // Reports / Stored Procs
         api.POST("/reports/generate", GenerateMonthlyReport)
@@ -53,8 +59,6 @@ func RegisterRoutes(r *gin.Engine) {
         api.POST("/challenges/:id/checkin", CheckinChallenge)
         api.GET("/challenges/:id/progress", GetChallengeDailyProgress)
         api.GET("/challenges/:id/summary", GetChallengeSummary)
-
-
     }
 }
 
@@ -95,14 +99,16 @@ func Login(c *gin.Context) {
         c.JSON(401, gin.H{"error": "用户不存在或联系方式未验证"})
         return
     }
-    println("user.PasswordHash:",user.PasswordHash);
-    println("in.Password:",in.Password);
-
-
-    // 4️⃣ 校验密码（课程项目可明文，生产需 hash）
+    
+    // 密码校验 (兼容前端传来的 SHA256 哈希)
     if user.PasswordHash != in.Password {
-        c.JSON(401, gin.H{"error": "密码错误"})
-        return
+        // 如果前端没加密，这里也可以尝试再次对比 (可选)
+         hash := sha256.Sum256([]byte(in.Password))
+         hashedInput := hex.EncodeToString(hash[:])
+         if user.PasswordHash != hashedInput {
+             c.JSON(401, gin.H{"error": "密码错误"})
+             return
+         }
     }
 
     c.JSON(200, gin.H{
@@ -132,12 +138,17 @@ func CreateUser(c *gin.Context) {
         t, err := time.Parse("2006-01-02", in.DOB)
         if err == nil { dob = &t }
     }
+    
+    // 简单的 SHA256 加密存储，与前端一致
+    hash := sha256.Sum256([]byte(in.Password))
+    hashedPassword := hex.EncodeToString(hash[:])
+
     u := User{
         HealthID: in.HealthID,
         Name: in.Name,
         DateOfBirth: dob,
         Gender: in.Gender,
-        PasswordHash: in.Password, // TODO: hash it in production
+        PasswordHash: hashedPassword, 
     }
     if err := DB.Create(&u).Error; err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -314,6 +325,39 @@ func GetUserAppointments(c *gin.Context) {
     c.JSON(http.StatusOK, appts)
 }
 
+// 🆕 获取用户参与的挑战列表（包含挑战详情和个人进度）
+func GetUserChallenges(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+
+    // 定义返回结构，适配前端 CreateChallenge.vue 的需求
+    type UserChallengeResponse struct {
+        ChallengeID     int     `json:"challenge_id"`
+        ChallengeName   string  `json:"challenge_name"`
+        Description     string  `json:"description"`
+        Status          string  `json:"status"`            // 用户的参与状态
+        CurrentProgress float64 `json:"current_progress"`
+        TargetValue     float64 `json:"target_value"`
+        TargetUnit      string  `json:"target_unit"`
+        // 其他前端可能需要的字段
+    }
+
+    var results []UserChallengeResponse
+
+    // 联表查询：Participation LEFT JOIN Challenge
+    err := DB.Table("Participation").
+        Select("Participation.challenge_id, Challenge.challenge_name, Challenge.description, Participation.status, Participation.current_progress, Challenge.target_value, Challenge.target_unit").
+        Joins("JOIN Challenge ON Challenge.challenge_id = Participation.challenge_id").
+        Where("Participation.user_id = ?", uid).
+        Scan(&results).Error
+
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+
+    c.JSON(http.StatusOK, results)
+}
+
 func CreateChallenge(c *gin.Context) {
     var in struct {
         CreatorID int    `json:"creator_id" binding:"required"`
@@ -329,10 +373,24 @@ func CreateChallenge(c *gin.Context) {
         IsPublic bool `json:"is_public"`
     }
     if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
-    sd, err := time.Parse("2006-01-02", in.StartDate)
-    if err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"bad start date"}); return }
+    sd, err := time.Parse("2006-01-02", in.StartDate) // 后端应处理 ISO8601 或 Simple Date
+    if err != nil { 
+         // 尝试解析 RFC3339 格式 (2025-07-01T00:00:00Z)
+         t, e2 := time.Parse(time.RFC3339, in.StartDate)
+         if e2 != nil {
+             c.JSON(http.StatusBadRequest, gin.H{"error":"bad start date"}); return 
+         }
+         sd = t
+    }
     ed, err := time.Parse("2006-01-02", in.EndDate)
-    if err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"bad end date"}); return }
+    if err != nil { 
+         t, e2 := time.Parse(time.RFC3339, in.EndDate)
+         if e2 != nil {
+             c.JSON(http.StatusBadRequest, gin.H{"error":"bad end date"}); return 
+         }
+         ed = t
+    }
+
     ch := Challenge{
         CreatorID: in.CreatorID,
         ChallengeName: in.Name,
@@ -639,4 +697,3 @@ func GetChallengeSummary(c *gin.Context) {
         "last_update":     p.LastUpdate,
     })
 }
-
