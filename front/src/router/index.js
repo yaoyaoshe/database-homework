@@ -1,3 +1,4 @@
+// ... import existing ...
 import { createRouter, createWebHistory } from 'vue-router'
 import { useUserStore } from '@/stores/user'
 import Layout from '@/views/Layout.vue'
@@ -6,6 +7,7 @@ import Login from '@/views/Login.vue'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // ... Login, Register routes ...
     {
       path: '/login',
       name: 'Login',
@@ -21,31 +23,34 @@ const router = createRouter({
       component: Layout,
       redirect: '/appointments',
       children: [
+        // ... existing children ...
         {
-          path: 'appointments',
-          name: 'Appointments',
-          component: () => import('@/views/appointment/AppointmentManager.vue')
+            path: 'appointments',
+            component: () => import('@/views/appointment/AppointmentManager.vue')
         },
         {
-          path: 'providers',
-          name: 'Providers',
-          component: () => import('@/views/provider/ProviderList.vue')
+            path: 'providers',
+            component: () => import('@/views/provider/ProviderList.vue')
         },
         {
-          path: 'challenges',
-          name: 'Challenges',
-          component: () => import('@/views/challenge/ChallengeCenter.vue')
+            path: 'challenges',
+            component: () => import('@/views/challenge/ChallengeCenter.vue')
         },
         {
-          path: 'reports',
-          name: 'Reports',
-          component: () => import('@/views/report/MonthlyReport.vue')
+            path: 'reports',
+            component: () => import('@/views/report/MonthlyReport.vue')
+        },
+        // === 新增：个人中心路由 ===
+        {
+          path: 'profile',
+          name: 'Profile',
+          component: () => import('@/views/profile/UserProfile.vue')
         }
       ]
     }
   ]
 })
-
+// ... guard ...
 // 路由守卫
 router.beforeEach((to, from, next) => {
   const userStore = useUserStore()

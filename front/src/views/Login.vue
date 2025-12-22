@@ -24,6 +24,7 @@ import { login } from '@/api/all'
 import { useUserStore } from '@/stores/user'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { sha256 } from 'js-sha256' // 引入加密库
 
 const form = ref({ identifier: '', password: '' })
 const loading = ref(false)
@@ -35,13 +36,20 @@ const handleLogin = async () => {
   
   loading.value = true
   try {
-    const res = await login(form.value)
-    // res 包含 { user_id, health_id, name }
+    // 后端 loddata.sql 显示密码使用 SHA2(..., 256) 存储
+    // 后端 handler.go 直接比较 user.PasswordHash == in.Password
+    // 因此前端必须发送 SHA256 哈希值
+    const loginData = {
+      identifier: form.value.identifier,
+      password: sha256(form.value.password) 
+    }
+    
+    const res = await login(loginData)
     userStore.setUser(res)
     ElMessage.success('登录成功')
     router.push('/')
   } catch (e) {
-    // 错误在 request.js 已处理
+    console.error(e)
   } finally {
     loading.value = false
   }
