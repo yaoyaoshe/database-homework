@@ -233,6 +233,26 @@ CREATE TABLE MonthlyReport (
     INDEX idx_user_reports (user_id, report_month DESC)
 ) COMMENT '健康月度报告表';
 
+CREATE TABLE ChallengeDailyProgress (
+    progress_id INT PRIMARY KEY AUTO_INCREMENT,
+    challenge_id INT NOT NULL,
+    user_id INT NOT NULL,
+    progress_date DATE NOT NULL COMMENT '记录日期',
+    progress_value DECIMAL(10,2) NOT NULL COMMENT '当日进度值',
+    progress_unit VARCHAR(20) COMMENT '单位，如步、千卡',
+    is_completed BOOLEAN DEFAULT FALSE COMMENT '当日是否完成',
+    notes TEXT COMMENT '备注说明',
+    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (challenge_id) REFERENCES Challenge(challenge_id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES User(user_id) ON DELETE CASCADE,
+
+    UNIQUE KEY uniq_user_challenge_date (challenge_id, user_id, progress_date),
+    INDEX idx_challenge_date (challenge_id, progress_date),
+    INDEX idx_user_date (user_id, progress_date)
+) COMMENT='挑战每日进度记录表';
+
+
 -- ==================== 系统功能表 ====================
 
 -- 13. 用户活动记录表（用于统计活跃用户）

@@ -1,385 +1,642 @@
 package main
 
 import (
-	"net/http"
-	"strconv"
-	"time"
-	"github.com/gin-gonic/gin"
+    "net/http"
+    "time"
+    "strconv"
+
+    "github.com/gin-gonic/gin"
+    "gorm.io/gorm"
+    "encoding/json"
 )
 
 func RegisterRoutes(r *gin.Engine) {
-	api := r.Group("/api")
-	{
-		// 用户与账户
-		api.POST("/users", CreateUser)
-		api.GET("/users/:id", GetUser)
-		api.PUT("/users/:id", UpdateUser)
-		api.GET("/users/:id/emails", GetUserEmails)
-		api.POST("/users/:id/emails", AddEmail)
-		api.DELETE("/users/:id/emails/:emailid", DeleteEmail)
-		api.GET("/users/:id/phones", GetUserPhones)
-		api.POST("/users/:id/phones", AddPhone)
-		api.DELETE("/users/:id/phones/:phoneid", DeletePhone)
-		api.GET("/users/:id/providers", GetUserProviders)
-		api.POST("/users/:id/providers/:provider_id", LinkProvider)
-		api.DELETE("/users/:id/providers/:provider_id", UnlinkProvider)
+    api := r.Group("/api")
+    {
 
-		// 预约
-		api.POST("/appointments", CreateAppointment)
-		api.PUT("/appointments/:id/cancel", CancelAppointment)
-		api.GET("/users/:id/appointments", GetUserAppointments)
+        // Login
+        api.POST("/auth/login",Login)
 
-		// 挑战
-		api.POST("/challenges", CreateChallenge)
-		api.POST("/challenges/:id/invite", InviteToChallenge)
-		api.POST("/challenges/:id/join", JoinChallenge)
-		api.GET("/users/:id/challenges", GetUserChallenges)
-		
-		// 数据与报表
-		api.POST("/health-data", CreateHealthData)
-		api.GET("/health-data/:user_id", GetHealthData)
-		api.POST("/reports/generate", GenerateMonthlyReport)
-		api.GET("/search/health", SearchHealthData)
+        // Users
+        api.POST("/users", CreateUser)
+        api.GET("/users/:id", GetUser)
 
-		// 统计
-		api.GET("/stats/popular_challenges", MostPopularChallenges)
-		api.GET("/stats/active_users", MostActiveUsers)
-	}
+        // Email / Phone
+        api.POST("/users/:id/emails", AddEmail)
+        api.DELETE("/users/:id/emails/:emailid", DeleteEmail)
+        api.POST("/users/:id/phones", AddPhone)
+        api.DELETE("/users/:id/phones/:phoneid", DeletePhone)
+
+        // Providers
+        api.GET("/providers", ListProviders)
+        //api.POST("/users/:id/providers/:provider_id", LinkProvider)
+        api.POST("/users/:id/providers", LinkProvider)
+        api.DELETE("/users/:id/providers/:provider_id", UnlinkProvider)
+
+        // Appointments
+        api.POST("/appointments", CreateAppointment)
+        api.PUT("/appointments/:id/cancel", CancelAppointment)
+        api.GET("/users/:id/appointments", GetUserAppointments)
+
+        // Challenges
+        api.POST("/challenges", CreateChallenge)
+        api.POST("/challenges/:id/invite", InviteToChallenge)
+        api.POST("/challenges/:id/join", JoinChallenge)
+        api.GET("/challenges/:id/participants", GetChallengeParticipants)
+
+        // Reports / Stored Procs
+        api.POST("/reports/generate", GenerateMonthlyReport)
+        api.GET("/stats/popular_challenges", MostPopularChallenges)
+        api.GET("/stats/active_users", MostActiveUsers)
+
+        // 每日挑战记录
+        api.POST("/challenges/:id/checkin", CheckinChallenge)
+        api.GET("/challenges/:id/progress", GetChallengeDailyProgress)
+        api.GET("/challenges/:id/summary", GetChallengeSummary)
+
+
+    }
 }
 
-// --- 用户 ---
+func Login(c *gin.Context) {
+    var in struct {
+        Identifier string `json:"identifier" binding:"required"`
+        Password   string `json:"password" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    var user User
+    var err error
+
+    // 1️⃣ 先按 health_id 查
+    err = DB.Where("health_id = ?", in.Identifier).
+        First(&user).Error
+
+    // 2️⃣ 如果没找到，用已验证邮箱查
+    if err != nil {
+        err = DB.
+            Joins("JOIN Email e ON e.user_id = User.user_id").
+            Where("e.email_address = ?", in.Identifier).
+            First(&user).Error
+    }
+
+    // 3️⃣ 如果还没找到，用已验证手机号查
+    if err != nil {
+        err = DB.
+            Joins("JOIN UserPhone p ON p.user_id = User.user_id").
+            Where("p.phone_number = ?", in.Identifier).
+            First(&user).Error
+    }
+
+    if err != nil {
+        c.JSON(401, gin.H{"error": "用户不存在或联系方式未验证"})
+        return
+    }
+    println("user.PasswordHash:",user.PasswordHash);
+    println("in.Password:",in.Password);
+
+
+    // 4️⃣ 校验密码（课程项目可明文，生产需 hash）
+    if user.PasswordHash != in.Password {
+        c.JSON(401, gin.H{"error": "密码错误"})
+        return
+    }
+
+    c.JSON(200, gin.H{
+        "user_id": user.UserID,
+        "health_id": user.HealthID,
+        "name": user.Name,
+    })
+}
+
+
+
+// CreateUser 简化示例（注意生产需密码哈希）
 func CreateUser(c *gin.Context) {
-	var user User
-	if err := c.ShouldBindJSON(&user); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	user.CreatedAt, user.UpdatedAt = time.Now(), time.Now()
-	if err := DB.Create(&user).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, user)
+    var in struct {
+        HealthID string `json:"health_id" binding:"required"`
+        Name     string `json:"name" binding:"required"`
+        DOB      string `json:"date_of_birth"`
+        Gender   string `json:"gender"`
+        Password string `json:"password" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+    var dob *time.Time
+    if in.DOB != "" {
+        t, err := time.Parse("2006-01-02", in.DOB)
+        if err == nil { dob = &t }
+    }
+    u := User{
+        HealthID: in.HealthID,
+        Name: in.Name,
+        DateOfBirth: dob,
+        Gender: in.Gender,
+        PasswordHash: in.Password, // TODO: hash it in production
+    }
+    if err := DB.Create(&u).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusCreated, u)
 }
 
 func GetUser(c *gin.Context) {
-	var user User
-	if err := DB.First(&user, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
-		return
-	}
-	c.JSON(http.StatusOK, user)
-}
-
-func UpdateUser(c *gin.Context) {
-	var req UserUpdateReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	DB.Model(&User{}).Where("user_id = ?", c.Param("id")).Updates(map[string]interface{}{
-		"name": req.Name, "gender": req.Gender, "date_of_birth": req.DateOfBirth,
-	})
-	c.JSON(http.StatusOK, gin.H{"message": "Updated"})
-}
-
-// --- 账户信息 ---
-func GetUserEmails(c *gin.Context) {
-	var l []Email
-	DB.Where("user_id=?", c.Param("id")).Find(&l)
-	c.JSON(http.StatusOK, l)
+    id, _ := strconv.Atoi(c.Param("id"))
+    var u User
+    if err := DB.First(&u, "user_id = ?", id).Error; err != nil {
+        if err == gorm.ErrRecordNotFound {
+            c.JSON(http.StatusNotFound, gin.H{"error":"user not found"})
+            return
+        }
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusOK, u)
 }
 
 func AddEmail(c *gin.Context) {
-	uid, _ := strconv.Atoi(c.Param("id"))
-	var req struct { Email string `json:"email"` }
-	c.ShouldBindJSON(&req)
-	DB.Create(&Email{UserID: uid, EmailAddress: req.Email})
-	c.JSON(http.StatusOK, gin.H{"message": "Added"})
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var in struct { Email string `json:"email" binding:"required,email"` }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+    e := Email{UserID: uid, EmailAddress: in.Email, IsVerified: true}
+    if err := DB.Create(&e).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error":err.Error()})
+        return
+    }
+    c.JSON(http.StatusCreated, e)
 }
 
 func DeleteEmail(c *gin.Context) {
-	DB.Delete(&Email{}, c.Param("emailid"))
-	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
-}
-
-func GetUserPhones(c *gin.Context) {
-	var l []PhoneNumber
-	DB.Where("user_id=?", c.Param("id")).Find(&l)
-	c.JSON(http.StatusOK, l)
+    emailID, _ := strconv.Atoi(c.Param("emailid"))
+    if err := DB.Delete(&Email{}, emailID).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.Status(http.StatusNoContent)
 }
 
 func AddPhone(c *gin.Context) {
-	uid, _ := strconv.Atoi(c.Param("id"))
-	var req struct { Phone string `json:"phone"` }
-	c.ShouldBindJSON(&req)
-	DB.Create(&PhoneNumber{UserID: uid, PhoneNumber: req.Phone})
-	c.JSON(http.StatusOK, gin.H{"message": "Added"})
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var in struct { Phone string `json:"phone" binding:"required"` }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+    p := UserPhone{UserID: uid, PhoneNumber: in.Phone, PhoneType: "手机", IsVerified: false}
+    if err := DB.Create(&p).Error; err != nil { c.JSON(http.StatusInternalServerError, gin.H{"error":err.Error()}); return }
+    c.JSON(http.StatusCreated, p)
 }
 
 func DeletePhone(c *gin.Context) {
-	DB.Delete(&PhoneNumber{}, c.Param("phoneid"))
-	c.JSON(http.StatusOK, gin.H{"message": "Deleted"})
+    phoneID, _ := strconv.Atoi(c.Param("phoneid"))
+    if err := DB.Delete(&UserPhone{}, phoneID).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.Status(http.StatusNoContent)
 }
 
-func GetUserProviders(c *gin.Context) {
-	// 定义一个临时的响应结构体，包含医生信息 + 关系类型
-	type ProviderWithRel struct {
-		ProviderID       int     `json:"provider_id"`
-		Name             string  `json:"name"`
-		Specialty        string  `json:"specialty"`
-		ContactInfo      *string `json:"contact_info"`
-		RelationshipType string  `json:"relationship_type"` // 关键：添加这个字段接收 UserProvider 表的数据
-	}
+func ListProviders(c *gin.Context) {
+    var providers []Provider
 
-	var list []ProviderWithRel
+    q := DB.Model(&Provider{})
+    if s := c.Query("specialty"); s != "" {
+        q = q.Where("specialty = ?", s)
+    }
+    if c.Query("verified") == "true" {
+        q = q.Where("is_verified = true")
+    }
 
-	// 修改 SQL：显式查询 Provider 表的字段 和 UserProvider 表的 relationship_type
-	err := DB.Raw(`
-		SELECT 
-			p.provider_id, 
-			p.name, 
-			p.specialty, 
-			p.contact_info, 
-			up.relationship_type
-		FROM UserProvider up
-		JOIN Provider p ON up.provider_id = p.provider_id
-		WHERE up.user_id = ?
-	`, c.Param("id")).Scan(&list).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, list)
+    q.Find(&providers)
+    c.JSON(200, providers)
 }
 
-// func GetUserProviders(c *gin.Context) {
-// 	var p []Provider
-// 	DB.Raw("SELECT p.* FROM Provider p JOIN UserProvider up ON p.provider_id=up.provider_id WHERE up.user_id=?", c.Param("id")).Scan(&p)
-// 	c.JSON(http.StatusOK, p)
-// }
 
 func LinkProvider(c *gin.Context) {
-	uid, _ := strconv.Atoi(c.Param("id"))
-	pid, _ := strconv.Atoi(c.Param("provider_id"))
-	DB.Create(&UserProvider{UserID: uid, ProviderID: pid, LinkDate: time.Now()})
-	c.JSON(http.StatusOK, gin.H{"message": "Linked"})
+    uid, _ := strconv.Atoi(c.Param("id"))
+
+    var in struct {
+        ProviderID int    `json:"provider_id" binding:"required"`
+        Relation   string `json:"relationship_type" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    up := UserProvider{
+        UserID: uid,
+        ProviderID: in.ProviderID,
+        RelationshipType: in.Relation,
+        LinkDate: time.Now(),
+    }
+
+    if err := DB.Create(&up).Error; err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(201, up)
 }
+
 
 func UnlinkProvider(c *gin.Context) {
-	DB.Where("user_id=? AND provider_id=?", c.Param("id"), c.Param("provider_id")).Delete(&UserProvider{})
-	c.JSON(http.StatusOK, gin.H{"message": "Unlinked"})
+    uid, _ := strconv.Atoi(c.Param("id"))
+    pid, _ := strconv.Atoi(c.Param("provider_id"))
+    if err := DB.Delete(&UserProvider{}, "user_id = ? AND provider_id = ?", uid, pid).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.Status(http.StatusNoContent)
 }
 
-// --- 预约 (含 24h 限制) ---
 func CreateAppointment(c *gin.Context) {
-	var a Appointment
-	if err := c.ShouldBindJSON(&a); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	a.Status = "已预约"
-	DB.Create(&a)
-	c.JSON(http.StatusCreated, a)
+    var in struct {
+        UserID          int    `json:"user_id" binding:"required"`
+        ProviderID      int    `json:"provider_id" binding:"required"`
+        AppointmentDate string `json:"appointment_date" binding:"required"` // RFC3339
+        DurationMinutes int    `json:"duration_minutes"`
+        ConsultationType string `json:"consultation_type"`
+        Reason          string `json:"reason"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+    dt, err := time.Parse(time.RFC3339, in.AppointmentDate)
+    if err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"bad datetime"}); return }
+    appt := Appointment{
+        UserID: in.UserID,
+        ProviderID: in.ProviderID,
+        AppointmentDate: dt,
+        DurationMinutes: in.DurationMinutes,
+        ConsultationType: in.ConsultationType,
+        Reason: &in.Reason,
+        Status: "已预约",
+        CreatedAt: time.Now(),
+        UpdatedAt: time.Now(),
+    }
+    if err := DB.Create(&appt).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusCreated, appt)
 }
 
 func CancelAppointment(c *gin.Context) {
-	var a Appointment
-	if err := DB.First(&a, c.Param("id")).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "预约不存在"})
-		return
-	}
+    id, _ := strconv.Atoi(c.Param("id"))
+    var in struct { Reason string `json:"reason"` }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
 
-	// 24小时限制
-	if a.AppointmentDate.Sub(time.Now()) < 24*time.Hour {
-		c.JSON(http.StatusForbidden, gin.H{"error": "距离预约时间不足24小时，无法取消"})
-		return
-	}
-
-	DB.Model(&a).Update("status", "已取消")
-	c.JSON(http.StatusOK, gin.H{"message": "已取消"})
+    var appt Appointment
+    if err := DB.First(&appt, "appointment_id = ?", id).Error; err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error":"appointment not found"}); return
+    }
+    // 应用层检查：必须在 24 小时前取消
+    if time.Until(appt.AppointmentDate) < 24*time.Hour {
+        c.JSON(http.StatusForbidden, gin.H{"error":"无法在预约时间24小时内取消预约"})
+        return
+    }
+    now := time.Now()
+    appt.Status = "已取消"
+    appt.CancellationReason = &in.Reason
+    appt.CancelledAt = &now
+    appt.UpdatedAt = now
+    if err := DB.Save(&appt).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
+    }
+    c.JSON(http.StatusOK, appt)
 }
 
 func GetUserAppointments(c *gin.Context) {
-	var list []Appointment
-	DB.Where("user_id=?", c.Param("id")).Order("appointment_date desc").Find(&list)
-	c.JSON(http.StatusOK, list)
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var appts []Appointment
+    DB.Where("user_id = ?", uid).Order("appointment_date desc").Find(&appts)
+    c.JSON(http.StatusOK, appts)
 }
 
-// --- 挑战与邀请 ---
 func CreateChallenge(c *gin.Context) {
-	var ch Challenge
-	c.ShouldBindJSON(&ch)
-	ch.Status = "进行中"
-	DB.Create(&ch)
-	c.JSON(http.StatusCreated, ch)
-}
-
-func JoinChallenge(c *gin.Context) {
-	cid, _ := strconv.Atoi(c.Param("id"))
-	var req struct { UserID int `json:"user_id"` }
-	c.ShouldBindJSON(&req)
-	DB.Create(&Participation{ChallengeID: cid, UserID: req.UserID, JoinedAt: time.Now(), Status: "参与中"})
-	c.JSON(http.StatusOK, gin.H{"message": "Joined"})
+    var in struct {
+        CreatorID int    `json:"creator_id" binding:"required"`
+        Name      string `json:"challenge_name" binding:"required"`
+        Description string `json:"description"`
+        ChallengeType string `json:"challenge_type"`
+        TargetMetric  string `json:"target_metric"`
+        TargetValue   float64 `json:"target_value"`
+        TargetUnit    string  `json:"target_unit"`
+        StartDate string `json:"start_date" binding:"required"` // YYYY-MM-DD
+        EndDate   string `json:"end_date" binding:"required"`
+        MaxParticipants int `json:"max_participants"`
+        IsPublic bool `json:"is_public"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+    sd, err := time.Parse("2006-01-02", in.StartDate)
+    if err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"bad start date"}); return }
+    ed, err := time.Parse("2006-01-02", in.EndDate)
+    if err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"bad end date"}); return }
+    ch := Challenge{
+        CreatorID: in.CreatorID,
+        ChallengeName: in.Name,
+        Description: in.Description,
+        ChallengeType: in.ChallengeType,
+        TargetMetric: in.TargetMetric,
+        TargetValue: in.TargetValue,
+        TargetUnit: in.TargetUnit,
+        StartDate: &sd,
+        EndDate: &ed,
+        MaxParticipants: in.MaxParticipants,
+        IsPublic: in.IsPublic,
+        Status: "筹备中",
+        CreatedAt: time.Now(),
+        UpdatedAt: time.Now(),
+    }
+    if err := DB.Create(&ch).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
+    }
+    c.JSON(http.StatusCreated, ch)
 }
 
 func InviteToChallenge(c *gin.Context) {
-	cid, _ := strconv.Atoi(c.Param("id"))
-	var req struct {
-		SenderID       int    `json:"sender_id"`
-		RecipientType  string `json:"recipient_type"`
-		RecipientValue string `json:"recipient_value"`
-		Message        string `json:"message"`
-	}
-	c.ShouldBindJSON(&req)
-
-	inv := Invitation{
-		ChallengeID:    cid,
-		SenderID:       req.SenderID,
-		RecipientType:  req.RecipientType,
-		RecipientValue: req.RecipientValue,
-		Message:        req.Message,
-		InvitationDate: time.Now(),
-		Status:         "Pending",
-	}
-	DB.Create(&inv)
-	c.JSON(http.StatusCreated, gin.H{"message": "邀请已发送"})
+    cid, _ := strconv.Atoi(c.Param("id"))
+    var in struct {
+        SenderID int `json:"sender_id" binding:"required"`
+        RecipientType string `json:"recipient_type" binding:"required"` // 邮箱/手机号/用户ID
+        RecipientValue string `json:"recipient_value" binding:"required"`
+        Message string `json:"message"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+    inv := Invitation{
+        ChallengeID: cid,
+        SenderID: in.SenderID,
+        RecipientType: in.RecipientType,
+        RecipientValue: in.RecipientValue,
+        InvitationDate: time.Now(),
+        Status: "待处理",
+        Message: &in.Message,
+        CreatedAt: time.Now(),
+    }
+    if err := DB.Create(&inv).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
+    }
+    c.JSON(http.StatusCreated, inv)
 }
 
-func GetUserChallenges(c *gin.Context) {
-	var list []struct {
-		ChallengeID     int     `json:"challenge_id"`
-		ChallengeName   string  `json:"challenge_name"`
-		ChallengeType   string  `json:"challenge_type"`
-		TargetValue     float64 `json:"target_value"`
-		TargetUnit      string  `json:"target_unit"`
-		CurrentProgress float64 `json:"current_progress"`
-		Status          string  `json:"status"`
-	}
-	DB.Raw(`
-		SELECT c.challenge_id, c.challenge_name, c.challenge_type, c.target_value, c.target_unit, 
-		       p.current_progress, p.status 
-		FROM Participation p JOIN Challenge c ON p.challenge_id = c.challenge_id 
-		WHERE p.user_id = ?`, c.Param("id")).Scan(&list)
-	c.JSON(http.StatusOK, list)
+func JoinChallenge(c *gin.Context) {
+    cid, _ := strconv.Atoi(c.Param("id"))
+    var in struct { UserID int `json:"user_id" binding:"required"` }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+    p := Participation{
+        ChallengeID: cid,
+        UserID: in.UserID,
+        JoinedAt: time.Now(),
+        CurrentProgress: 0,
+        ProgressUnit: "",
+        Status: "参与中",
+    }
+    if err := DB.Create(&p).Error; err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()}); return
+    }
+    c.JSON(http.StatusCreated, p)
 }
 
 func GetChallengeParticipants(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{})
+    cid, _ := strconv.Atoi(c.Param("id"))
+    var parts []Participation
+    DB.Where("challenge_id = ?", cid).Find(&parts)
+    c.JSON(http.StatusOK, parts)
 }
 
-// --- 健康数据与高级搜索 ---
-func CreateHealthData(c *gin.Context) {
-	var d HealthData
-	c.ShouldBindJSON(&d)
-	DB.Create(&d)
-	c.JSON(http.StatusCreated, d)
+type MonthlyReportResponse struct {
+    UserID                int             `json:"user_id"`
+    ReportMonth           string          `json:"report_month"`
+    TotalAppointments     int             `json:"total_appointments"`
+    CompletedAppointments int             `json:"completed_appointments"`
+    CancelledAppointments int             `json:"cancelled_appointments"`
+    TotalChallenges       int             `json:"total_challenges"`
+    CompletedChallenges   int             `json:"completed_challenges"`
+    HealthSummary         json.RawMessage `json:"health_summary"`
+    Recommendations       string          `json:"recommendations"`
+    GeneratedAt           time.Time       `json:"generated_at"`
 }
 
-func GetHealthData(c *gin.Context) {
-	uid := c.Param("user_id")
-	dtype := c.Query("type")
-	q := DB.Where("user_id=?", uid).Order("recorded_at desc")
-	if dtype != "" {
-		q = q.Where("data_type=?", dtype)
-	}
-	var list []HealthData
-	q.Find(&list)
-	c.JSON(http.StatusOK, list)
-}
 
-func SearchHealthData(c *gin.Context) {
-	uid := c.Query("user_id")
-	dtype := c.Query("type")
-	month := c.Query("month")
-
-	q := DB.Model(&HealthData{}).Where("user_id=? AND data_type=?", uid, dtype)
-	if month != "" {
-		t, _ := time.Parse("2006-01", month)
-		q = q.Where("recorded_at >= ? AND recorded_at < ?", t, t.AddDate(0, 1, 0))
-	}
-
-	var list []HealthData
-	q.Order("recorded_at desc").Find(&list)
-	var total float64
-	q.Select("COALESCE(SUM(data_value), 0)").Scan(&total)
-
-	c.JSON(http.StatusOK, gin.H{"total_value": total, "records": list})
-}
-
-// --- 报表 (真实计算) ---
 func GenerateMonthlyReport(c *gin.Context) {
-	var req struct {
-		UserID int    `json:"user_id"`
-		Month  string `json:"month"`
-	}
-	c.ShouldBindJSON(&req)
+    var in struct {
+        UserID int    `json:"user_id" binding:"required"`
+        Month  string `json:"month" binding:"required"` // YYYY-MM-01
+    }
 
-	t, _ := time.Parse("2006-01-02", req.Month)
-	start, end := t, t.AddDate(0, 1, 0)
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
 
-	var wStats struct {
-		Avg float64 `json:"avg"`
-		Min float64 `json:"min"`
-		Max float64 `json:"max"`
-	}
-	DB.Model(&HealthData{}).Select("AVG(data_value) as avg, MIN(data_value) as min, MAX(data_value) as max").
-		Where("user_id=? AND data_type='Weight' AND recorded_at >= ? AND recorded_at < ?", req.UserID, start, end).Scan(&wStats)
+    // ✅ 1. 调用存储过程（生成或确认存在）
+    if err := DB.Exec(
+        "CALL GenerateMonthlyReport(?, ?)",
+        in.UserID,
+        in.Month,
+    ).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{
+            "error": "生成月度报表失败: " + err.Error(),
+        })
+        return
+    }
 
-	var stepsTotal int
-	DB.Model(&HealthData{}).Select("COALESCE(SUM(data_value), 0)").
-		Where("user_id=? AND data_type='Steps' AND recorded_at >= ? AND recorded_at < ?", req.UserID, start, end).Scan(&stepsTotal)
+    // ✅ 2. 查询 MonthlyReport 表
+    var report MonthlyReportResponse
+    err := DB.Raw(`
+        SELECT 
+            user_id,
+            DATE_FORMAT(report_month, '%Y-%m-%d') AS report_month,
+            total_appointments,
+            completed_appointments,
+            cancelled_appointments,
+            total_challenges,
+            completed_challenges,
+            health_summary,
+            recommendations,
+            generated_at
+        FROM MonthlyReport
+        WHERE user_id = ? AND report_month = ?
+    `, in.UserID, in.Month).Scan(&report).Error
 
-	c.JSON(http.StatusOK, gin.H{"month": req.Month, "weight_stats": wStats, "total_steps": stepsTotal, "message": "Report Generated"})
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{
+            "error": "读取月度报表失败: " + err.Error(),
+        })
+        return
+    }
+
+    // ✅ 3. 返回真正的报表
+    c.JSON(http.StatusOK, report)
 }
 
-// --- 统计 ---
+
 func MostPopularChallenges(c *gin.Context) {
-	limitStr := c.Query("limit")
-	if limitStr == "" {
-		limitStr = "5"
-	}
-	limit, _ := strconv.Atoi(limitStr)
-
-	type Row struct {
-		ChallengeID      int     `json:"challenge_id"`
-		ChallengeName    string  `json:"challenge_name"`
-		ParticipantCount int     `json:"participant_count"`
-		AvgProgress      float64 `json:"avg_progress"`
-	}
-	var rows []Row
-	// 使用 Raw SQL 避免存储过程调用失败
-	err := DB.Raw(`
-		SELECT c.challenge_id, c.challenge_name, COUNT(p.user_id) as participant_count, AVG(p.current_progress) as avg_progress 
-		FROM Challenge c 
-		LEFT JOIN Participation p ON c.challenge_id = p.challenge_id 
-		GROUP BY c.challenge_id 
-		ORDER BY participant_count DESC 
-		LIMIT ?`, limit).Scan(&rows).Error
-
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, rows)
+    limitStr := c.Query("limit")
+    if limitStr == "" { limitStr = "5" }
+    limit, _ := strconv.Atoi(limitStr)
+    // 调用存储过程 FindMostPopularChallenges
+    type Row struct {
+        ChallengeID    int     `json:"challenge_id"`
+        ChallengeName  string  `json:"challenge_name"`
+        ChallengeType  string  `json:"challenge_type"`
+        StartDate      *time.Time `json:"start_date"`
+        EndDate        *time.Time `json:"end_date"`
+        ParticipantCount int   `json:"participant_count"`
+        AvgProgress    float64 `json:"avg_progress"`
+        CompletedCount int    `json:"completed_count"`
+    }
+    var rows []Row
+    if err := DB.Raw("CALL FindMostPopularChallenges(?)", limit).Scan(&rows).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
+    }
+    c.JSON(http.StatusOK, rows)
 }
 
 func MostActiveUsers(c *gin.Context) {
-	type Row struct {
-		Name          string  `json:"name"`
-		ActivityScore float64 `json:"activity_score"`
-	}
-	var rows []Row
-	// 简单的 SQL 替代存储过程
-	DB.Raw(`
-		SELECT u.name, COUNT(p.participation_id)*10 + COUNT(a.appointment_id)*5 as activity_score
-		FROM User u
-		LEFT JOIN Participation p ON u.user_id = p.user_id
-		LEFT JOIN Appointment a ON u.user_id = a.user_id
-		GROUP BY u.user_id
-		ORDER BY activity_score DESC
-		LIMIT 10`).Scan(&rows)
-	c.JSON(http.StatusOK, rows)
+    limitStr := c.Query("limit")
+    if limitStr == "" { limitStr = "10" }
+    limit, _ := strconv.Atoi(limitStr)
+    type Row struct {
+        UserID int `json:"user_id"`
+        HealthID string `json:"health_id"`
+        Name string `json:"name"`
+        HealthRecordCount int64 `json:"health_record_count"`
+        CompletedChallenges int64 `json:"completed_challenges"`
+        AppointmentCount int64 `json:"appointment_count"`
+        ActivityScore float64 `json:"activity_score"`
+    }
+    var rows []Row
+    if err := DB.Raw("CALL FindMostActiveUsers(?)", limit).Scan(&rows).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
+    }
+    c.JSON(http.StatusOK, rows)
 }
+
+type ChallengeDailyProgress struct {
+    ProgressID    int       `gorm:"primaryKey;column:progress_id"`
+    ChallengeID   int       `gorm:"column:challenge_id"`
+    UserID        int       `gorm:"column:user_id"`
+    ProgressDate  time.Time `gorm:"column:progress_date"`
+    ProgressValue float64   `gorm:"column:progress_value"`
+    ProgressUnit  string    `gorm:"column:progress_unit"`
+    IsCompleted   bool      `gorm:"column:is_completed"`
+    Notes         *string   `gorm:"column:notes"`
+    RecordedAt    time.Time `gorm:"column:recorded_at"`
+}
+
+func (ChallengeDailyProgress) TableName() string {
+    return "ChallengeDailyProgress"
+}
+
+func CheckinChallenge(c *gin.Context) {
+    challengeID, _ := strconv.Atoi(c.Param("id"))
+
+    var in struct {
+        UserID        int     `json:"user_id" binding:"required"`
+        Date          string  `json:"date" binding:"required"` // YYYY-MM-DD
+        ProgressValue float64 `json:"progress_value" binding:"required"`
+        ProgressUnit  string  `json:"progress_unit"`
+        IsCompleted   bool    `json:"is_completed"`
+        Notes         string  `json:"notes"`
+    }
+
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+        return
+    }
+
+    progressDate, err := time.Parse("2006-01-02", in.Date)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "日期格式应为 YYYY-MM-DD"})
+        return
+    }
+
+    // 1️⃣ 防止重复打卡（唯一索引兜底）
+    record := ChallengeDailyProgress{
+        ChallengeID:   challengeID,
+        UserID:        in.UserID,
+        ProgressDate:  progressDate,
+        ProgressValue: in.ProgressValue,
+        ProgressUnit:  in.ProgressUnit,
+        IsCompleted:   in.IsCompleted,
+        RecordedAt:    time.Now(),
+    }
+
+    if in.Notes != "" {
+        record.Notes = &in.Notes
+    }
+
+    if err := DB.Create(&record).Error; err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{
+            "error": "今日已打卡或数据错误：" + err.Error(),
+        })
+        return
+    }
+
+    // 2️⃣ 同步更新 Participation 累计进度
+    if err := DB.Exec(`
+        UPDATE Participation
+        SET 
+            current_progress = current_progress + ?,
+            last_update = NOW(),
+            status = CASE 
+                WHEN current_progress + ? >= (
+                    SELECT target_value FROM Challenge WHERE challenge_id = ?
+                ) THEN '已完成'
+                ELSE status
+            END
+        WHERE challenge_id = ? AND user_id = ?
+    `, in.ProgressValue, in.ProgressValue, challengeID, challengeID, in.UserID).Error; err != nil {
+
+        c.JSON(http.StatusInternalServerError, gin.H{
+            "error": "更新累计进度失败：" + err.Error(),
+        })
+        return
+    }
+
+    c.JSON(http.StatusCreated, gin.H{
+        "message": "打卡成功",
+        "data": record,
+    })
+}
+
+func GetChallengeDailyProgress(c *gin.Context) {
+    challengeID, _ := strconv.Atoi(c.Param("id"))
+    userID, _ := strconv.Atoi(c.Query("user_id"))
+
+    var records []ChallengeDailyProgress
+
+    DB.Where(
+        "challenge_id = ? AND user_id = ?",
+        challengeID, userID,
+    ).Order("progress_date asc").Find(&records)
+
+    c.JSON(http.StatusOK, records)
+}
+
+func GetChallengeSummary(c *gin.Context) {
+    challengeID, _ := strconv.Atoi(c.Param("id"))
+    userID, _ := strconv.Atoi(c.Query("user_id"))
+
+    var p Participation
+    if err := DB.First(
+        &p,
+        "challenge_id = ? AND user_id = ?",
+        challengeID, userID,
+    ).Error; err != nil {
+
+        c.JSON(http.StatusNotFound, gin.H{"error": "未找到参与记录"})
+        return
+    }
+
+    c.JSON(http.StatusOK, gin.H{
+        "challenge_id":    challengeID,
+        "user_id":         userID,
+        "current_progress": p.CurrentProgress,
+        "status":          p.Status,
+        "last_update":     p.LastUpdate,
+    })
+}
+
