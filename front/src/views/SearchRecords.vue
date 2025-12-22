@@ -2,129 +2,102 @@
   <div class="page-container">
     <div class="page-header">
       <el-button icon="ArrowLeft" circle @click="$router.push('/')" style="margin-right: 15px" />
-      <h2>搜索中心</h2>
+      <h2>搜索记录</h2>
     </div>
 
-    <el-card shadow="hover" style="margin-bottom: 20px;">
+    <el-card>
       <el-form :inline="true" class="search-form">
-        <el-form-item label="数据类型">
+        <el-form-item label="搜索类型">
           <el-select v-model="searchType" style="width: 140px">
             <el-option label="预约记录" value="appointment" />
-            </el-select>
-        </el-form-item>
-        <el-form-item label="关键词">
-          <el-input 
-            v-model="keyword" 
-            placeholder="搜医生ID/类型/说明..." 
-            prefix-icon="Search" 
-            clearable
-            @input="handleSearch"
-          />
-        </el-form-item>
-        <el-form-item label="状态筛选">
-           <el-select v-model="filterStatus" placeholder="全部状态" clearable @change="handleSearch" style="width: 120px">
-            <el-option label="已预约" value="已预约" />
-            <el-option label="已完成" value="已完成" />
-            <el-option label="已取消" value="已取消" />
+            <el-option label="健康数据" value="health" />
           </el-select>
+        </el-form-item>
+
+        <template v-if="searchType === 'appointment'">
+          <el-form-item label="关键词">
+            <el-input v-model="keyword" placeholder="搜医生/原因..." />
+          </el-form-item>
+        </template>
+
+        <template v-else>
+          <el-form-item label="指标类型">
+            <el-select v-model="healthType" style="width: 120px">
+              <el-option label="体重" value="Weight" />
+              <el-option label="步数" value="Steps" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="月份">
+            <el-date-picker v-model="searchMonth" type="month" value-format="YYYY-MM" placeholder="不限" />
+          </el-form-item>
+        </template>
+
+        <el-form-item>
+          <el-button type="primary" @click="handleSearch">搜索</el-button>
         </el-form-item>
       </el-form>
     </el-card>
 
-    <el-card v-loading="loading">
-      <template #header>
-        <div style="display: flex; justify-content: space-between;">
-           <span>搜索结果 ({{ filteredList.length }})</span>
-           <el-button v-if="filteredList.length > 0" size="small" type="success" @click="exportData">导出Excel</el-button>
-        </div>
-      </template>
+    <div style="margin-top: 20px;">
+      <div v-if="searchType === 'health' && healthResults">
+        <el-alert type="success" :closable="false" style="margin-bottom: 15px;">
+          <h3>总计数值: {{ healthResults.total_value }}</h3>
+        </el-alert>
+        <el-table :data="healthResults.records" border stripe>
+          <el-table-column prop="recorded_at" label="记录时间" />
+          <el-table-column prop="data_value" label="数值" />
+          <el-table-column prop="unit" label="单位" />
+        </el-table>
+      </div>
 
-      <el-table :data="filteredList" stripe style="width: 100%" height="400">
-        <el-table-column prop="appointment_id" label="ID" width="80" />
-        <el-table-column label="时间" width="180">
-          <template #default="scope">{{ formatTime(scope.row.appointment_date) }}</template>
-        </el-table-column>
-        <el-table-column prop="provider_id" label="医生ID" width="100" />
+      <el-table v-else-if="searchType === 'appointment'" :data="filteredAppts" border stripe>
+        <el-table-column prop="appointment_date" label="时间" />
         <el-table-column prop="consultation_type" label="类型" />
-        <el-table-column prop="reason" label="原因/症状" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态">
-          <template #default="scope">
-             <el-tag :type="scope.row.status === '已预约' ? 'primary' : 'info'">{{ scope.row.status }}</el-tag>
-          </template>
-        </el-table-column>
+        <el-table-column prop="status" label="状态" />
       </el-table>
-      
-      <el-empty v-if="!loading && filteredList.length === 0" description="未找到匹配记录" />
-    </el-card>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, computed } from 'vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/stores/user'
-import * as XLSX from 'xlsx' // 建议安装: npm install xlsx
 
 const userStore = useUserStore()
 const searchType = ref('appointment')
+// 预约搜索 state
 const keyword = ref('')
-const filterStatus = ref('')
-const rawData = ref([])
-const loading = ref(false)
+const apptList = ref([])
+// 健康搜索 state
+const healthType = ref('Steps')
+const searchMonth = ref('')
+const healthResults = ref(null)
 
-// 获取原始数据
-const fetchData = async () => {
-  loading.value = true
-  try {
-    // 接口文档：GET /users/{id}/appointments
+const handleSearch = async () => {
+  if (searchType.value === 'appointment') {
     const res = await request.get(`/users/${userStore.userId}/appointments`)
-    rawData.value = res || []
-  } catch(e) {
-    rawData.value = []
-  } finally {
-    loading.value = false
+    apptList.value = res || []
+  } else {
+    // 调用新的高级搜索接口
+    const res = await request.get(`/search/health`, {
+      params: {
+        user_id: userStore.userId,
+        type: healthType.value,
+        month: searchMonth.value
+      }
+    })
+    healthResults.value = res
   }
 }
 
-// 前端过滤逻辑
-const filteredList = computed(() => {
-  return rawData.value.filter(item => {
-    // 1. 状态筛选
-    if (filterStatus.value && item.status !== filterStatus.value) return false
-    
-    // 2. 关键词模糊匹配 (匹配 医生ID, 类型, 原因)
-    if (!keyword.value) return true
-    const searchStr = keyword.value.toLowerCase()
-    
-    return (
-      String(item.provider_id).includes(searchStr) ||
-      (item.consultation_type && item.consultation_type.includes(searchStr)) ||
-      (item.reason && item.reason.includes(searchStr))
-    )
-  })
-})
-
-const handleSearch = () => {
-  // 触发 computed 重新计算，实际是自动的，这里主要用于防抖扩展
-}
-
-const formatTime = (t) => new Date(t).toLocaleString()
-
-// 纯前端导出功能
-const exportData = () => {
-  const ws = XLSX.utils.json_to_sheet(filteredList.value)
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, "SearchResults")
-  XLSX.writeFile(wb, "search_export.xlsx")
-}
-
-onMounted(() => {
-  fetchData()
+const filteredAppts = computed(() => {
+  if (!keyword.value) return apptList.value
+  return apptList.value.filter(i => JSON.stringify(i).toLowerCase().includes(keyword.value.toLowerCase()))
 })
 </script>
 
 <style scoped>
+.page-container { padding: 20px; }
 .page-header { display: flex; align-items: center; margin-bottom: 24px; }
-.page-header h2 { margin: 0; font-size: 24px; color: #333; }
-.search-form { display: flex; flex-wrap: wrap; }
 </style>

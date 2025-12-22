@@ -1,87 +1,92 @@
 <template>
   <div class="page-container">
     <div class="page-header">
-      <div style="display: flex; align-items: center;">
-        <el-button icon="ArrowLeft" circle @click="$router.push('/')" style="margin-right: 15px" />
-        <h2>月度健康摘要</h2>
-      </div>
-      <div class="controls">
-        <el-date-picker v-model="month" type="month" placeholder="选择月份" value-format="YYYY-MM-01" />
-        <el-button type="primary" @click="generateReport" style="margin-left: 10px;">生成/刷新报告</el-button>
-      </div>
+      <el-button icon="ArrowLeft" circle @click="$router.push('/')" style="margin-right: 15px" />
+      <h2>月度健康摘要</h2>
+    </div>
+    
+    <div class="controls">
+      <el-date-picker v-model="month" type="month" placeholder="选择月份" value-format="YYYY-MM-01" />
+      <el-button type="primary" @click="fetchData" style="margin-left: 10px;">生成报告</el-button>
     </div>
 
-    <el-row :gutter="20" style="margin-top:20px">
-      <el-col :span="12">
-        <el-card shadow="hover">
-          <div id="chart-weight" style="height: 300px;"></div>
+    <el-row :gutter="20" style="margin-top: 20px;" v-if="reportData">
+      <el-col :span="8">
+        <el-card shadow="hover" class="stat-box">
+          <h3>本月总步数</h3>
+          <div class="big-num">{{ reportData.total_steps || 0 }}</div>
+          <div class="unit">步</div>
         </el-card>
       </el-col>
-      <el-col :span="12">
-        <el-card shadow="hover">
-          <div id="chart-steps" style="height: 300px;"></div>
+      <el-col :span="16">
+        <el-card shadow="hover" class="stat-box">
+          <h3>体重统计 (kg)</h3>
+          <el-row style="text-align: center; width: 100%;">
+            <el-col :span="8"><div>平均: {{ reportData.weight_stats?.avg?.toFixed(1) || '-' }}</div></el-col>
+            <el-col :span="8"><div>最低: {{ reportData.weight_stats?.min || '-' }}</div></el-col>
+            <el-col :span="8"><div>最高: {{ reportData.weight_stats?.max || '-' }}</div></el-col>
+          </el-row>
         </el-card>
       </el-col>
     </el-row>
 
-    <el-alert 
-      title="数据说明" 
-      type="info" 
-      description="后端接口仅支持生成报告，暂无获取报告JSON详情的API。上方图表为演示数据。"
-      show-icon 
-      style="margin-top:20px"
-    />
+    <el-card shadow="hover" style="margin-top: 20px;">
+      <div id="chart-weight" style="height: 300px;"></div>
+    </el-card>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import * as echarts from 'echarts'
 import request from '@/utils/request'
 import { useUserStore } from '@/stores/user'
-import { ElMessage } from 'element-plus'
+import * as echarts from 'echarts'
 
 const userStore = useUserStore()
-const month = ref('2024-03-01')
+const month = ref('2024-03-01') // 默认值
+const reportData = ref(null)
 
-const generateReport = async () => {
+const fetchData = async () => {
   if(!month.value) return
   try {
+    // 1. 获取统计摘要 (Aggregated Stats)
     const res = await request.post('/reports/generate', {
-      user_id: parseInt(userStore.userId),
-      month: month.value
+      user_id: parseInt(userStore.userId), month: month.value
     })
-    ElMessage.success(res.message)
-    initCharts() // 重绘演示图表
+    reportData.value = res
+
+    // 2. 获取详细数据用于绘图 (Raw Data)
+    const rawData = await request.get(`/health-data/${userStore.userId}?type=Weight`)
+    renderChart(rawData)
   } catch(e) {}
 }
 
-const initCharts = () => {
-  const chartWeight = echarts.init(document.getElementById('chart-weight'))
-  chartWeight.setOption({
-    title: { text: '体重变化 (kg)' },
-    tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: ['W1', 'W2', 'W3', 'W4'] },
-    yAxis: { type: 'value', min: 60 },
-    series: [{ data: [72.5, 71.8, 71.2, 70.8], type: 'line', smooth: true, itemStyle: { color: '#007bff' } }]
-  })
+const renderChart = (data) => {
+  const chartDom = document.getElementById('chart-weight')
+  if(!chartDom) return
+  const myChart = echarts.init(chartDom)
+  
+  // 简单处理数据，倒序排列
+  const sorted = (data || []).reverse()
+  const dates = sorted.map(i => i.recorded_at.substring(0, 10))
+  const values = sorted.map(i => i.data_value)
 
-  const chartSteps = echarts.init(document.getElementById('chart-steps'))
-  chartSteps.setOption({
-    title: { text: '每日步数' },
+  myChart.setOption({
+    title: { text: '体重趋势图' },
     tooltip: { trigger: 'axis' },
-    xAxis: { type: 'category', data: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] },
-    yAxis: { type: 'value' },
-    series: [{ data: [8000, 9200, 10500, 7800, 11000, 12500, 9000], type: 'bar', itemStyle: { color: '#34d399' } }]
+    xAxis: { type: 'category', data: dates },
+    yAxis: { type: 'value', scale: true },
+    series: [{ data: values, type: 'line', smooth: true }]
   })
 }
 
-onMounted(() => {
-  initCharts()
-})
+onMounted(fetchData)
 </script>
 
 <style scoped>
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-.page-header h2 { margin: 0; font-size: 24px; color: #333; }
+.page-container { padding: 20px; }
+.page-header { display: flex; align-items: center; margin-bottom: 20px; }
+.controls { background: #fff; padding: 15px; border-radius: 8px; }
+.stat-box { text-align: center; height: 120px; display: flex; flex-direction: column; justify-content: center; }
+.big-num { font-size: 32px; font-weight: bold; color: #007bff; margin: 10px 0; }
 </style>
