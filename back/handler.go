@@ -81,40 +81,52 @@ func RegisterRoutes(r *gin.Engine) {
 }
 
 //家庭组
+type AddFamilyInput struct {
+    TargetHealthID string `json:"target_health_id" binding:"required"`
+    Relationship   string `json:"relationship" binding:"required"`
+}
+
+// 家庭组：修改为通过 Health ID 添加
 func AddFamilyMember(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
 
-    var in struct {
-        RelatedUserID int    `json:"related_user_id" binding:"required"`
-        Relationship  string `json:"relationship" binding:"required"`
-    }
+    var in AddFamilyInput
     if err := c.ShouldBindJSON(&in); err != nil {
         c.JSON(400, gin.H{"error": err.Error()})
         return
     }
 
-    if uid == in.RelatedUserID {
+    // 1. 根据 Health ID 查找被关联用户
+    var relatedUser User
+    if err := DB.Where("health_id = ?", in.TargetHealthID).First(&relatedUser).Error; err != nil {
+        c.JSON(404, gin.H{"error": "未找到该 Health ID 对应的用户"})
+        return
+    }
+
+    if uid == relatedUser.UserID {
         c.JSON(400, gin.H{"error": "不能关联自己"})
         return
     }
 
-    // 校验 related_user 是否存在
+    // 2. 检查是否已经关联
     var cnt int64
-    DB.Model(&User{}).Where("user_id = ?", in.RelatedUserID).Count(&cnt)
-    if cnt == 0 {
-        c.JSON(404, gin.H{"error": "被关联用户不存在"})
-        return
+    DB.Model(&UserFamily{}).Where("user_id = ? AND related_user_id = ?", uid, relatedUser.UserID).Count(&cnt)
+    if cnt > 0 {
+         c.JSON(400, gin.H{"error": "该用户已在您的家庭成员列表中"})
+         return
     }
 
+    // 3. 创建关联
     fam := UserFamily{
-        UserID: uid,
-        RelatedUserID: in.RelatedUserID,
-        Relationship: in.Relationship,
-        IsVerified: false,
+        UserID:        uid,
+        RelatedUserID: relatedUser.UserID,
+        Relationship:  in.Relationship,
+        IsVerified:    false, // 默认未验证
     }
 
     if err := DB.Create(&fam).Error; err != nil {
-        c.JSON(500, gin.H{"error": err.Error()})
+        // 捕获可能的枚举错误
+        c.JSON(500, gin.H{"error": "添加失败，请检查关系类型是否正确: " + err.Error()})
         return
     }
 

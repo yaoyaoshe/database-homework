@@ -3,6 +3,9 @@
     <div class="page-header">
       <el-button icon="ArrowLeft" circle @click="$router.push('/')" style="margin-right: 15px" />
       <h2>寻找医生</h2>
+      <el-button type="success" plain style="margin-left: auto" @click="$router.push('/account-info')">
+        <el-icon style="margin-right: 5px"><UserFilled /></el-icon> 我的医疗团队
+      </el-button>
     </div>
 
     <el-card shadow="never" class="filter-card">
@@ -20,7 +23,7 @@
           <el-checkbox v-model="filters.verified" label="只看已认证" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="fetchProviders">查询</el-button>
+          <el-button type="primary" @click="fetchData">查询</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -48,7 +51,25 @@
         </div>
 
         <div class="doctor-actions">
-          <el-button type="primary" plain block @click="openLinkDialog(doctor)">建立关联</el-button>
+          <el-button 
+            v-if="isLinked(doctor.provider_id)" 
+            type="success" 
+            plain 
+            block 
+            disabled
+          >
+            <el-icon><Check /></el-icon> 已关联
+          </el-button>
+          
+          <el-button 
+            v-else 
+            type="primary" 
+            plain 
+            block 
+            @click="openLinkDialog(doctor)"
+          >
+            建立关联
+          </el-button>
         </div>
       </el-card>
     </div>
@@ -60,9 +81,7 @@
           <el-select v-model="linkForm.relation" style="width: 100%">
             <el-option label="家庭医生" value="家庭医生" />
             <el-option label="主治医生" value="主治医生" />
-            <el-option label="专科顾问" value="专科顾问" />
-            <el-option label="其他" value="其他" />
-          </el-select>
+            </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -81,6 +100,7 @@ import { ElMessage } from 'element-plus'
 
 const userStore = useUserStore()
 const providers = ref([])
+const myProviders = ref([]) // 存储已关联的医生 ID
 const loading = ref(false)
 const linking = ref(false)
 const dialogVisible = ref(false)
@@ -95,20 +115,32 @@ const linkForm = reactive({
   relation: '家庭医生'
 })
 
-const fetchProviders = async () => {
+// 同时获取所有医生和已关联医生
+const fetchData = async () => {
   loading.value = true
   try {
     const params = {}
     if (filters.specialty) params.specialty = filters.specialty
     if (filters.verified) params.verified = 'true'
     
-    const res = await request.get('/providers', { params })
-    providers.value = res || []
+    // 并行请求
+    const [allRes, myRes] = await Promise.all([
+      request.get('/providers', { params }),
+      userStore.userId ? request.get(`/users/${userStore.userId}/providers`) : Promise.resolve([])
+    ])
+
+    providers.value = allRes || []
+    myProviders.value = myRes || [] // myRes 是包含 provider_id 的对象数组
   } catch (e) {
-    ElMessage.error('获取医生列表失败')
+    ElMessage.error('数据加载失败')
   } finally {
     loading.value = false
   }
+}
+
+// 检查是否已关联
+const isLinked = (pid) => {
+  return myProviders.value.some(p => p.provider_id === pid)
 }
 
 const openLinkDialog = (doctor) => {
@@ -121,13 +153,13 @@ const confirmLink = async () => {
   if (!userStore.userId) return ElMessage.warning('请先登录')
   linking.value = true
   try {
-    // 适配后端：POST /users/:id/providers, Body: { provider_id, relationship_type }
     await request.post(`/users/${userStore.userId}/providers`, {
       provider_id: currentDoctor.value.provider_id,
       relationship_type: linkForm.relation
     })
     ElMessage.success('关联成功')
     dialogVisible.value = false
+    fetchData() // 刷新列表状态
   } catch (e) {
     ElMessage.error(e.response?.data?.error || '关联失败')
   } finally {
@@ -142,10 +174,11 @@ const getContactInfo = (jsonStr, key) => {
   } catch { return '-' }
 }
 
-onMounted(fetchProviders)
+onMounted(fetchData)
 </script>
 
 <style scoped>
+/* 样式保持不变 */
 .page-container { padding: 24px; max-width: 1200px; margin: 0 auto; }
 .page-header { display: flex; align-items: center; margin-bottom: 24px; }
 .filter-card { margin-bottom: 20px; }

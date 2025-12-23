@@ -30,8 +30,7 @@
               <el-select v-model="editForm.gender" style="width: 100%">
                 <el-option label="男" value="男" />
                 <el-option label="女" value="女" />
-                <el-option label="其他" value="其他" />
-              </el-select>
+                </el-select>
             </el-form-item>
             <el-form-item label="出生日期">
               <el-date-picker 
@@ -95,21 +94,13 @@
 
         <el-tab-pane label="医疗团队">
           <div class="action-bar">
-            <el-input v-model="linkForm.providerId" placeholder="输入医生 ID" style="width: 150px; margin-right: 10px;" />
-            
-            <el-select v-model="linkForm.relation" placeholder="关系类型" style="width: 150px; margin-right: 10px;">
-              <el-option label="家庭医生" value="家庭医生" />
-              <el-option label="主治医生" value="主治医生" />
-              <el-option label="专科顾问" value="专科顾问" />
-            </el-select>
-
-            <el-button type="success" @click="linkProvider">关联医生</el-button>
+            <span>您的专属医疗团队</span>
             <el-button link type="primary" @click="$router.push('/doctor-list')" style="margin-left: auto">
-              去医生库查找 <el-icon><ArrowRight /></el-icon>
+              去寻找/添加医生 <el-icon><ArrowRight /></el-icon>
             </el-button>
           </div>
           
-          <el-table :data="providerList" border stripe v-loading="loading">
+          <el-table :data="providerList" border stripe v-loading="loading" empty-text="暂无关联医生">
             <el-table-column prop="name" label="医生姓名" width="120">
               <template #default="scope">
                 <strong>{{ scope.row.name }}</strong>
@@ -144,19 +135,21 @@
         
         <el-tab-pane label="家庭成员">
           <div class="action-bar">
-            <el-input v-model="familyForm.relatedId" placeholder="成员 User ID" style="width: 160px; margin-right: 10px;">
-              <template #prefix><el-icon><User /></el-icon></template>
+            <el-input v-model="familyForm.targetHealthId" placeholder="成员 Health ID" style="width: 200px; margin-right: 10px;">
+              <template #prefix><el-icon><Postcard /></el-icon></template>
             </el-input>
+            
             <el-select v-model="familyForm.relation" placeholder="关系" style="width: 120px; margin-right: 10px;">
               <el-option label="父母" value="父母" />
               <el-option label="子女" value="子女" />
               <el-option label="配偶" value="配偶" />
+              <el-option label="亲属" value="亲属" />
               <el-option label="其他" value="其他" />
             </el-select>
             <el-button type="primary" @click="addFamilyMember">添加成员</el-button>
           </div>
 
-           <el-table :data="familyList" border stripe v-loading="loading">
+           <el-table :data="familyList" border stripe v-loading="loading" empty-text="暂无家庭成员">
             <el-table-column prop="name" label="姓名" />
             <el-table-column prop="relationship" label="关系" width="120" />
             <el-table-column prop="is_verified" label="验证状态" width="120">
@@ -200,15 +193,9 @@ const familyList = ref([])
 const newEmail = ref('')
 const newPhone = ref('')
 
-// 关联表单
-const linkForm = reactive({
-  providerId: '',
-  relation: '家庭医生'
-})
-
-// 家庭表单
+// 家庭表单：使用 Health ID
 const familyForm = reactive({
-  relatedId: '',
+  targetHealthId: '',
   relation: '亲属'
 })
 
@@ -222,14 +209,12 @@ const fetchAllData = async () => {
   if (!userStore.userId) return
   loading.value = true
   try {
-    // 1. 获取用户信息
     const userRes = await request.get(`/users/${userStore.userId}`)
     userStore.userInfo = userRes
     editForm.name = userRes.name
     editForm.gender = userRes.gender
     editForm.date_of_birth = userRes.date_of_birth ? userRes.date_of_birth.substring(0, 10) : ''
 
-    // 2. 获取其他列表
     const [emailRes, phoneRes, providerRes, familyRes] = await Promise.all([
       request.get(`/users/${userStore.userId}/emails`),
       request.get(`/users/${userStore.userId}/phones`),
@@ -261,7 +246,6 @@ const handleUpdateProfile = async () => {
   }
 }
 
-// 邮箱操作
 const addEmail = async () => {
   if (!newEmail.value) return
   try {
@@ -279,7 +263,6 @@ const deleteEmail = async (id) => {
   } catch(e){}
 }
 
-// 电话操作
 const addPhone = async () => {
   if (!newPhone.value) return
   try {
@@ -297,22 +280,6 @@ const deletePhone = async (id) => {
   } catch(e){}
 }
 
-// 医生操作
-const linkProvider = async () => {
-  if (!linkForm.providerId) return ElMessage.warning('请输入医生ID')
-  try {
-    await request.post(`/users/${userStore.userId}/providers`, {
-      provider_id: parseInt(linkForm.providerId),
-      relationship_type: linkForm.relation
-    })
-    ElMessage.success('关联医生成功')
-    linkForm.providerId = ''
-    fetchAllData()
-  } catch(e) {
-    ElMessage.error(e.response?.data?.error || '关联失败')
-  }
-}
-
 const unlinkProvider = async (pid) => {
   try {
     await request.delete(`/users/${userStore.userId}/providers/${pid}`)
@@ -321,19 +288,19 @@ const unlinkProvider = async (pid) => {
   } catch(e) {}
 }
 
-// 家庭成员操作
 const addFamilyMember = async () => {
-  if(!familyForm.relatedId) return ElMessage.warning('请输入成员ID')
+  if(!familyForm.targetHealthId) return ElMessage.warning('请输入成员 Health ID')
   try {
+    // 后端已更新为接收 target_health_id
     await request.post(`/users/${userStore.userId}/family`, {
-      related_user_id: parseInt(familyForm.relatedId),
+      target_health_id: familyForm.targetHealthId,
       relationship: familyForm.relation
     })
     ElMessage.success('添加成功')
-    familyForm.relatedId = ''
+    familyForm.targetHealthId = ''
     fetchAllData()
   } catch(e) {
-     ElMessage.error(e.response?.data?.error || '添加失败')
+     ElMessage.error(e.response?.data?.error || '添加失败，请检查Health ID是否正确')
   }
 }
 
@@ -366,6 +333,7 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* 样式保持不变 */
 .page-container { padding: 20px; }
 .page-header { display: flex; align-items: center; margin-bottom: 24px; }
 .page-header h2 { margin: 0; font-size: 24px; color: #333; }
