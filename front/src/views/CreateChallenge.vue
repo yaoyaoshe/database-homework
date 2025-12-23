@@ -25,7 +25,7 @@
     </el-alert>
 
     <el-row :gutter="24" style="margin-top: 20px;">
-      <el-col :xs="24" :lg="8">
+       <el-col :xs="24" :lg="8">
         <el-card class="box-card create-card" shadow="hover">
           <template #header>
             <div class="card-header">
@@ -105,8 +105,8 @@
           </el-form>
         </el-card>
       </el-col>
-
-      <el-col :xs="24" :lg="16">
+       
+       <el-col :xs="24" :lg="16">
         <el-card class="box-card list-card" shadow="never">
           <template #header>
             <div class="card-header">
@@ -151,13 +151,16 @@
       <el-form :model="inviteForm" label-position="top">
         <el-form-item label="发送方式">
           <el-radio-group v-model="inviteForm.recipient_type">
+            <el-radio label="Health ID">Health ID</el-radio>
             <el-radio label="邮箱">邮箱</el-radio>
             <el-radio label="手机号">手机号</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item :label="inviteForm.recipient_type === '邮箱' ? '邮箱地址' : '手机号码'">
+        
+        <el-form-item :label="inviteForm.recipient_type === '邮箱' ? '邮箱地址' : (inviteForm.recipient_type === 'Health ID' ? '好友 Health ID' : '手机号码')">
           <el-input v-model="inviteForm.recipient_value" placeholder="请输入..." />
         </el-form-item>
+        
         <el-form-item label="邀请留言">
           <el-input v-model="inviteForm.message" type="textarea" :rows="2" />
         </el-form-item>
@@ -169,7 +172,7 @@
     </el-dialog>
 
     <el-dialog v-model="checkinVisible" title="每日打卡" width="400px" destroy-on-close>
-      <p style="margin-bottom:15px;color:#666">挑战：<strong>{{ currentCheckinChallenge?.challenge_name }}</strong></p>
+        <p style="margin-bottom:15px;color:#666">挑战：<strong>{{ currentCheckinChallenge?.challenge_name }}</strong></p>
       <el-form :model="checkinForm" label-position="top">
         <el-form-item label="日期">
           <el-date-picker v-model="checkinForm.date" type="date" value-format="YYYY-MM-DD" style="width: 100%" :disabled-date="d => d > new Date()" />
@@ -199,10 +202,10 @@ import request from '@/utils/request'
 import { useUserStore } from '@/stores/user'
 import { ElMessage } from 'element-plus'
 
+// ... (其他逻辑保持不变) ...
 const userStore = useUserStore()
 const formRef = ref(null)
 
-// 状态控制
 const loading = ref(false)
 const creating = ref(false)
 const inviting = ref(false)
@@ -216,7 +219,6 @@ const pendingInvites = ref([])
 const currentChallengeId = ref(null)
 const currentCheckinChallenge = ref(null)
 
-// 表单数据
 const form = reactive({
   challenge_name: '',
   description: '',
@@ -228,8 +230,9 @@ const form = reactive({
   is_public: true
 })
 
+// 修改：默认选中 Health ID
 const inviteForm = reactive({
-  recipient_type: '邮箱',
+  recipient_type: 'Health ID',
   recipient_value: '',
   message: '一起来参加这个健康挑战吧！'
 })
@@ -241,7 +244,6 @@ const checkinForm = reactive({
   notes: ''
 })
 
-// 根据指标自动关联单位
 watch(() => form.target_metric, (val) => {
   const map = { '体重': 'kg', '步数': '步', '睡眠时长': '小时', '运动时长': '分钟', '卡路里消耗': '千卡' }
   if (map[val]) form.target_unit = map[val]
@@ -350,13 +352,12 @@ const sendInvite = async () => {
     ElMessage.success('邀请已发送')
     inviteVisible.value = false
   } catch (error) {
-    ElMessage.error('发送邀请失败')
+    ElMessage.error(error.response?.data?.error || '发送邀请失败，请检查Health ID')
   } finally {
     inviting.value = false
   }
 }
 
-// 打开打卡弹窗
 const openCheckinDialog = (row) => {
   currentCheckinChallenge.value = row
   checkinForm.progress_value = 0
@@ -365,7 +366,6 @@ const openCheckinDialog = (row) => {
   checkinVisible.value = true
 }
 
-// 提交打卡
 const submitCheckin = async () => {
   if (!checkinForm.progress_value && checkinForm.progress_value !== 0) return
   checkingIn.value = true
@@ -380,7 +380,7 @@ const submitCheckin = async () => {
     })
     ElMessage.success('打卡成功')
     checkinVisible.value = false
-    fetchMyChallenges() // 刷新进度条
+    fetchMyChallenges()
   } catch(e) {
     ElMessage.error(e.response?.data?.error || '打卡失败')
   } finally {
@@ -402,6 +402,7 @@ onMounted(fetchMyChallenges)
 </script>
 
 <style scoped>
+/* 样式保持不变 */
 .page-container { padding: 24px; max-width: 1400px; margin: 0 auto; }
 .page-header { display: flex; align-items: center; margin-bottom: 24px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }

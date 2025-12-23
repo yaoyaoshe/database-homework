@@ -4,13 +4,12 @@ import (
     "net/http"
     "time"
     "strconv"
-    // "fmt" // 如果需要打印日志可取消注释
     "crypto/sha256"
     "encoding/hex"
+    "encoding/json"
 
     "github.com/gin-gonic/gin"
     "gorm.io/gorm"
-    "encoding/json"
 )
 
 func RegisterRoutes(r *gin.Engine) {
@@ -26,17 +25,17 @@ func RegisterRoutes(r *gin.Engine) {
 
         // Email / Phone
         api.POST("/users/:id/emails", AddEmail)
-        api.GET("/users/:id/emails", GetUserEmails)       // 🆕 新增：获取邮箱列表
+        api.GET("/users/:id/emails", GetUserEmails)
         api.DELETE("/users/:id/emails/:emailid", DeleteEmail)
         
         api.POST("/users/:id/phones", AddPhone)
-        api.GET("/users/:id/phones", GetUserPhones)       // 🆕 新增：获取电话列表
+        api.GET("/users/:id/phones", GetUserPhones)
         api.DELETE("/users/:id/phones/:phoneid", DeletePhone)
 
         // Providers
         api.GET("/providers", ListProviders)
         api.POST("/users/:id/providers", LinkProvider)
-        api.GET("/users/:id/providers", GetUserProviders) // 🆕 新增：获取已关联医生
+        api.GET("/users/:id/providers", GetUserProviders)
         api.DELETE("/users/:id/providers/:provider_id", UnlinkProvider)
 
         // Appointments
@@ -46,7 +45,7 @@ func RegisterRoutes(r *gin.Engine) {
 
         // Challenges
         api.POST("/challenges", CreateChallenge)
-        api.POST("/challenges/:id/invite", InviteToChallenge)
+        api.POST("/challenges/:id/invite", InviteToChallenge) // 修改：支持 Health ID
         api.POST("/challenges/:id/join", JoinChallenge)
         api.GET("/challenges/:id/participants", GetChallengeParticipants)
         api.GET("/users/:id/challenges", GetUserChallenges)
@@ -61,9 +60,14 @@ func RegisterRoutes(r *gin.Engine) {
         api.GET("/challenges/:id/progress", GetChallengeDailyProgress)
         api.GET("/challenges/:id/summary", GetChallengeSummary)
 
-        api.POST("/users/:id/family", AddFamilyMember)
+        // 家庭组相关路由
+        api.POST("/users/:id/family", AddFamilyMember) // 修改：通过 Health ID 添加
         api.GET("/users/:id/family", GetFamilyList)
         api.DELETE("/users/:id/family/:related_id", DeleteFamilyMember)
+        
+        // 🆕 新增：家庭验证相关路由
+        api.GET("/users/:id/family/requests", GetFamilyRequests) // 获取待处理请求
+        api.POST("/users/:id/family/verify", VerifyFamilyRequest) // 处理请求(接受/拒绝)
 
         api.GET("/users/:id/appointments/search", SearchAppointments)
         api.GET("/providers/search", SearchProviders)
@@ -80,13 +84,15 @@ func RegisterRoutes(r *gin.Engine) {
     }
 }
 
-//家庭组
+// ================= 家庭组相关 =================
+
 type AddFamilyInput struct {
     TargetHealthID string `json:"target_health_id" binding:"required"`
     Relationship   string `json:"relationship" binding:"required"`
 }
 
-// 家庭组：修改为通过 Health ID 添加
+// 添加家庭成员（发起请求）
+// 修改为通过 Health ID 查找用户，并创建未验证的关联
 func AddFamilyMember(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
 
@@ -108,24 +114,23 @@ func AddFamilyMember(c *gin.Context) {
         return
     }
 
-    // 2. 检查是否已经关联
+    // 2. 检查是否已经存在关联（无论是否验证）
     var cnt int64
     DB.Model(&UserFamily{}).Where("user_id = ? AND related_user_id = ?", uid, relatedUser.UserID).Count(&cnt)
     if cnt > 0 {
-         c.JSON(400, gin.H{"error": "该用户已在您的家庭成员列表中"})
+         c.JSON(400, gin.H{"error": "该用户已在您的家庭列表或待验证列表中"})
          return
     }
 
-    // 3. 创建关联
+    // 3. 创建关联 (IsVerified 默认为 false)
     fam := UserFamily{
         UserID:        uid,
         RelatedUserID: relatedUser.UserID,
         Relationship:  in.Relationship,
-        IsVerified:    false, // 默认未验证
+        IsVerified:    false, 
     }
 
     if err := DB.Create(&fam).Error; err != nil {
-        // 捕获可能的枚举错误
         c.JSON(500, gin.H{"error": "添加失败，请检查关系类型是否正确: " + err.Error()})
         return
     }
@@ -133,6 +138,7 @@ func AddFamilyMember(c *gin.Context) {
     c.JSON(201, fam)
 }
 
+// 获取家庭成员列表（仅显示已验证的，或者显示状态）
 func GetFamilyList(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
 
@@ -143,6 +149,7 @@ func GetFamilyList(c *gin.Context) {
         IsVerified    bool   `json:"is_verified"`
     }
 
+    // 这里查询的是“我主动添加的人”
     DB.Table("UserFamily uf").
         Select("u.user_id as related_user_id, u.name, uf.relationship, uf.is_verified").
         Joins("JOIN User u ON uf.related_user_id = u.user_id").
@@ -150,6 +157,65 @@ func GetFamilyList(c *gin.Context) {
         Scan(&res)
 
     c.JSON(200, res)
+}
+
+// 获取待处理的家庭请求 (别人加我，但我还没同意)
+func GetFamilyRequests(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id")) // 我是 related_user_id
+
+    var res []struct {
+        InitiatorID   int       `json:"initiator_id"`
+        InitiatorName string    `json:"initiator_name"`
+        Relationship  string    `json:"relationship"` // 对方称呼我的关系
+        CreatedAt     time.Time `json:"created_at"`
+    }
+
+    // 查询 UserFamily 表中 related_user_id 是我，且 is_verified 为 false 的记录
+    err := DB.Table("UserFamily uf").
+        Select("uf.user_id as initiator_id, u.name as initiator_name, uf.relationship, uf.created_at").
+        Joins("JOIN User u ON uf.user_id = u.user_id").
+        Where("uf.related_user_id = ? AND uf.is_verified = ?", uid, false).
+        Scan(&res).Error
+
+    if err != nil {
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(200, res)
+}
+
+// 验证（接受/拒绝）家庭请求
+func VerifyFamilyRequest(c *gin.Context) {
+    myID, _ := strconv.Atoi(c.Param("id")) // 我是被关联人
+    var in struct {
+        InitiatorID int  `json:"initiator_id" binding:"required"`
+        Accept      bool `json:"accept"` // true接受，false拒绝
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    if in.Accept {
+        // 接受：更新 is_verified = true
+        now := time.Now()
+        res := DB.Model(&UserFamily{}).
+            Where("user_id = ? AND related_user_id = ?", in.InitiatorID, myID).
+            Updates(map[string]interface{}{
+                "is_verified": true,
+                "verified_at": now,
+            })
+        if res.Error != nil {
+            c.JSON(500, gin.H{"error": res.Error.Error()})
+            return
+        }
+        
+        c.JSON(200, gin.H{"message": "已接受请求"})
+    } else {
+        // 拒绝：删除该条记录
+        DB.Delete(&UserFamily{}, "user_id = ? AND related_user_id = ?", in.InitiatorID, myID)
+        c.JSON(200, gin.H{"message": "已拒绝请求"})
+    }
 }
 
 func DeleteFamilyMember(c *gin.Context) {
@@ -160,7 +226,8 @@ func DeleteFamilyMember(c *gin.Context) {
     c.Status(204)
 }
 
-//查询搜索
+// ================= 查询与搜索 =================
+
 func SearchAppointments(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
     q := DB.Where("user_id = ?", uid)
@@ -212,7 +279,52 @@ func MetricSummary(c *gin.Context) {
     c.JSON(200, res)
 }
 
-//接受邀请
+// ================= 挑战邀请逻辑优化 =================
+
+// 修改：支持 Health ID 邀请，并自动转换为 User ID 存储
+func InviteToChallenge(c *gin.Context) {
+    cid, _ := strconv.Atoi(c.Param("id"))
+    var in struct {
+        SenderID       int    `json:"sender_id" binding:"required"`
+        RecipientType  string `json:"recipient_type" binding:"required"` // '邮箱', '手机号', 'Health ID'
+        RecipientValue string `json:"recipient_value" binding:"required"`
+        Message        string `json:"message"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
+
+    // 处理 Health ID 逻辑：转为 UserID
+    finalType := in.RecipientType
+    finalValue := in.RecipientValue
+
+    if in.RecipientType == "Health ID" {
+        var targetUser User
+        if err := DB.Where("health_id = ?", in.RecipientValue).First(&targetUser).Error; err != nil {
+            c.JSON(404, gin.H{"error": "找不到该 Health ID 对应的用户"})
+            return
+        }
+        // 转换存储格式，以便 PendingInvites 能查到（PendingInvites 依赖 '用户ID' 类型）
+        finalType = "用户ID"
+        finalValue = strconv.Itoa(targetUser.UserID)
+    }
+
+    inv := Invitation{
+        ChallengeID:    cid,
+        SenderID:       in.SenderID,
+        RecipientType:  finalType,
+        RecipientValue: finalValue,
+        InvitationDate: time.Now(),
+        Status:         "待处理",
+        Message:        &in.Message,
+        CreatedAt:      time.Now(),
+    }
+
+    if err := DB.Create(&inv).Error; err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(http.StatusCreated, inv)
+}
+
 func AcceptInvitation(c *gin.Context) {
     var in struct {
         InvitationID int `json:"invitation_id" binding:"required"`
@@ -257,7 +369,8 @@ func PendingInvites(c *gin.Context) {
     c.JSON(200, invs)
 }
 
-//设置主治
+// ================= 其他核心逻辑 =================
+
 func SetPrimaryProvider(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
     var in struct {
@@ -701,31 +814,6 @@ func CreateChallenge(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
     }
     c.JSON(http.StatusCreated, ch)
-}
-
-func InviteToChallenge(c *gin.Context) {
-    cid, _ := strconv.Atoi(c.Param("id"))
-    var in struct {
-        SenderID int `json:"sender_id" binding:"required"`
-        RecipientType string `json:"recipient_type" binding:"required"`
-        RecipientValue string `json:"recipient_value" binding:"required"`
-        Message string `json:"message"`
-    }
-    if err := c.ShouldBindJSON(&in); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":err.Error()}); return }
-    inv := Invitation{
-        ChallengeID: cid,
-        SenderID: in.SenderID,
-        RecipientType: in.RecipientType,
-        RecipientValue: in.RecipientValue,
-        InvitationDate: time.Now(),
-        Status: "待处理",
-        Message: &in.Message,
-        CreatedAt: time.Now(),
-    }
-    if err := DB.Create(&inv).Error; err != nil {
-        c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}); return
-    }
-    c.JSON(http.StatusCreated, inv)
 }
 
 func JoinChallenge(c *gin.Context) {
