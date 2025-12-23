@@ -11,7 +11,7 @@ var DB *gorm.DB
 
 func InitDB() {
     // 写死 MySQL 连接
-    dsn := "root:123456@tcp(127.0.0.1:3306)/HealthTrackDB?charset=utf8mb4&parseTime=True&loc=Local"
+    dsn := "root:2155@tcp(127.0.0.1:3306)/HealthTrackDB?charset=utf8mb4&parseTime=True&loc=Local"
 
     var err error
     DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})

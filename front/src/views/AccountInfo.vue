@@ -141,6 +141,40 @@
             </el-table-column>
           </el-table>
         </el-tab-pane>
+        
+        <el-tab-pane label="家庭成员">
+          <div class="action-bar">
+            <el-input v-model="familyForm.relatedId" placeholder="成员 User ID" style="width: 160px; margin-right: 10px;">
+              <template #prefix><el-icon><User /></el-icon></template>
+            </el-input>
+            <el-select v-model="familyForm.relation" placeholder="关系" style="width: 120px; margin-right: 10px;">
+              <el-option label="父母" value="父母" />
+              <el-option label="子女" value="子女" />
+              <el-option label="配偶" value="配偶" />
+              <el-option label="其他" value="其他" />
+            </el-select>
+            <el-button type="primary" @click="addFamilyMember">添加成员</el-button>
+          </div>
+
+           <el-table :data="familyList" border stripe v-loading="loading">
+            <el-table-column prop="name" label="姓名" />
+            <el-table-column prop="relationship" label="关系" width="120" />
+            <el-table-column prop="is_verified" label="验证状态" width="120">
+               <template #default="scope">
+                 <el-tag :type="scope.row.is_verified ? 'success' : 'info'">{{ scope.row.is_verified ? '已验证' : '待验证' }}</el-tag>
+               </template>
+            </el-table-column>
+            <el-table-column label="操作" width="80" align="center">
+              <template #default="scope">
+                <el-popconfirm title="确定删除该成员？" @confirm="deleteFamilyMember(scope.row.related_user_id)">
+                  <template #reference>
+                    <el-button type="danger" link icon="Delete"></el-button>
+                  </template>
+                </el-popconfirm>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
 
       </el-tabs>
     </el-card>
@@ -161,6 +195,7 @@ const saving = ref(false)
 const emailList = ref([])
 const phoneList = ref([])
 const providerList = ref([])
+const familyList = ref([])
 
 const newEmail = ref('')
 const newPhone = ref('')
@@ -169,6 +204,12 @@ const newPhone = ref('')
 const linkForm = reactive({
   providerId: '',
   relation: '家庭医生'
+})
+
+// 家庭表单
+const familyForm = reactive({
+  relatedId: '',
+  relation: '亲属'
 })
 
 const editForm = reactive({
@@ -188,21 +229,22 @@ const fetchAllData = async () => {
     editForm.gender = userRes.gender
     editForm.date_of_birth = userRes.date_of_birth ? userRes.date_of_birth.substring(0, 10) : ''
 
-    // 2. 获取邮箱列表
-    const emailRes = await request.get(`/users/${userStore.userId}/emails`)
-    emailList.value = emailRes
-
-    // 3. 获取电话列表
-    const phoneRes = await request.get(`/users/${userStore.userId}/phones`)
-    phoneList.value = phoneRes
+    // 2. 获取其他列表
+    const [emailRes, phoneRes, providerRes, familyRes] = await Promise.all([
+      request.get(`/users/${userStore.userId}/emails`),
+      request.get(`/users/${userStore.userId}/phones`),
+      request.get(`/users/${userStore.userId}/providers`),
+      request.get(`/users/${userStore.userId}/family`)
+    ])
     
-    // 4. 获取关联医生
-    const providerRes = await request.get(`/users/${userStore.userId}/providers`)
-    providerList.value = providerRes
+    emailList.value = emailRes || []
+    phoneList.value = phoneRes || []
+    providerList.value = providerRes || []
+    familyList.value = familyRes || []
 
   } catch(e) {
     console.error(e)
-    ElMessage.error('加载用户信息失败')
+    ElMessage.error('加载信息失败')
   } finally {
     loading.value = false
   }
@@ -219,6 +261,7 @@ const handleUpdateProfile = async () => {
   }
 }
 
+// 邮箱操作
 const addEmail = async () => {
   if (!newEmail.value) return
   try {
@@ -236,6 +279,7 @@ const deleteEmail = async (id) => {
   } catch(e){}
 }
 
+// 电话操作
 const addPhone = async () => {
   if (!newPhone.value) return
   try {
@@ -253,6 +297,7 @@ const deletePhone = async (id) => {
   } catch(e){}
 }
 
+// 医生操作
 const linkProvider = async () => {
   if (!linkForm.providerId) return ElMessage.warning('请输入医生ID')
   try {
@@ -272,6 +317,30 @@ const unlinkProvider = async (pid) => {
   try {
     await request.delete(`/users/${userStore.userId}/providers/${pid}`)
     ElMessage.success('已解除关联')
+    fetchAllData()
+  } catch(e) {}
+}
+
+// 家庭成员操作
+const addFamilyMember = async () => {
+  if(!familyForm.relatedId) return ElMessage.warning('请输入成员ID')
+  try {
+    await request.post(`/users/${userStore.userId}/family`, {
+      related_user_id: parseInt(familyForm.relatedId),
+      relationship: familyForm.relation
+    })
+    ElMessage.success('添加成功')
+    familyForm.relatedId = ''
+    fetchAllData()
+  } catch(e) {
+     ElMessage.error(e.response?.data?.error || '添加失败')
+  }
+}
+
+const deleteFamilyMember = async (rid) => {
+  try {
+    await request.delete(`/users/${userStore.userId}/family/${rid}`)
+    ElMessage.success('已移除成员')
     fetchAllData()
   } catch(e) {}
 }

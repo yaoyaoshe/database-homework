@@ -5,7 +5,26 @@
       <h2>健康挑战中心</h2>
     </div>
 
-    <el-row :gutter="24">
+    <el-alert 
+      v-if="pendingInvites.length > 0" 
+      type="info" 
+      show-icon 
+      :closable="false"
+      class="invite-alert"
+    >
+      <template #title>
+        <span style="font-weight: bold; font-size: 15px;">您有 {{ pendingInvites.length }} 个待处理的挑战邀请</span>
+      </template>
+      <div class="invite-list">
+        <div v-for="inv in pendingInvites" :key="inv.invitation_id" class="invite-item">
+          <span>挑战ID: <strong>{{ inv.challenge_id }}</strong> (来自用户 {{ inv.sender_id }})</span>
+          <div class="invite-msg" v-if="inv.message">留言: {{ inv.message }}</div>
+          <el-button type="primary" size="small" @click="handleAcceptInvite(inv.invitation_id)">接受邀请</el-button>
+        </div>
+      </div>
+    </el-alert>
+
+    <el-row :gutter="24" style="margin-top: 20px;">
       <el-col :xs="24" :lg="8">
         <el-card class="box-card create-card" shadow="hover">
           <template #header>
@@ -193,6 +212,7 @@ const inviteVisible = ref(false)
 const checkinVisible = ref(false)
 
 const myChallenges = ref([])
+const pendingInvites = ref([])
 const currentChallengeId = ref(null)
 const currentCheckinChallenge = ref(null)
 
@@ -241,12 +261,29 @@ const fetchMyChallenges = async () => {
   if (!userStore.userId) return
   loading.value = true
   try {
-    const res = await request.get(`/users/${userStore.userId}/challenges`)
-    myChallenges.value = res || []
+    const [challRes, invRes] = await Promise.all([
+       request.get(`/users/${userStore.userId}/challenges`),
+       request.get(`/users/${userStore.userId}/pending-invites`)
+    ])
+    myChallenges.value = challRes || []
+    pendingInvites.value = invRes || []
   } catch (error) {
     ElMessage.error("获取列表失败")
   } finally {
     loading.value = false
+  }
+}
+
+const handleAcceptInvite = async (invId) => {
+  try {
+    await request.post('/invitations/accept', {
+      invitation_id: invId,
+      user_id: parseInt(userStore.userId)
+    })
+    ElMessage.success('已接受邀请')
+    fetchMyChallenges()
+  } catch(e) {
+    ElMessage.error(e.response?.data?.error || '操作失败')
   }
 }
 
@@ -375,4 +412,8 @@ onMounted(fetchMyChallenges)
 .progress-info { display: flex; justify-content: space-between; font-size: 12px; color: #909399; margin-top: 4px; }
 .text-success { color: #67c23a; font-weight: bold; }
 .text-primary { color: #409eff; }
+.invite-alert { margin-bottom: 20px; }
+.invite-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.invite-item { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.6); padding: 8px 12px; border-radius: 4px; }
+.invite-msg { font-size: 12px; color: #666; margin-left: 10px; font-style: italic; }
 </style>
