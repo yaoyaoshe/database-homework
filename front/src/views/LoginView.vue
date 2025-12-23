@@ -31,7 +31,7 @@
           </el-button>
         </el-form>
         <div class="login-footer">
-          <span>还没有账号? <a href="#">立即注册</a></span>
+          <span>还没有账号? <router-link to="/register">立即注册</router-link></span>
         </div>
       </el-card>
     </div>
