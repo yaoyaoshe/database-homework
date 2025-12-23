@@ -60,8 +60,255 @@ func RegisterRoutes(r *gin.Engine) {
         api.POST("/challenges/:id/checkin", CheckinChallenge)
         api.GET("/challenges/:id/progress", GetChallengeDailyProgress)
         api.GET("/challenges/:id/summary", GetChallengeSummary)
+
+        api.POST("/users/:id/family", AddFamilyMember)
+        api.GET("/users/:id/family", GetFamilyList)
+        api.DELETE("/users/:id/family/:related_id", DeleteFamilyMember)
+
+        api.GET("/users/:id/appointments/search", SearchAppointments)
+        api.GET("/providers/search", SearchProviders)
+        api.GET("/users/:id/metrics/summary", MetricSummary)
+
+        api.POST("/invitations/accept", AcceptInvitation)
+        api.GET("/users/:id/pending-invites", PendingInvites)
+
+        api.PUT("/users/:id/primary-provider", SetPrimaryProvider)
+        api.GET("/users/:id/primary-provider", GetPrimaryProvider)
+
+        api.POST("/users/:id/verify", VerifyAccount)
+
     }
 }
+
+//家庭组
+func AddFamilyMember(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+
+    var in struct {
+        RelatedUserID int    `json:"related_user_id" binding:"required"`
+        Relationship  string `json:"relationship" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    if uid == in.RelatedUserID {
+        c.JSON(400, gin.H{"error": "不能关联自己"})
+        return
+    }
+
+    // 校验 related_user 是否存在
+    var cnt int64
+    DB.Model(&User{}).Where("user_id = ?", in.RelatedUserID).Count(&cnt)
+    if cnt == 0 {
+        c.JSON(404, gin.H{"error": "被关联用户不存在"})
+        return
+    }
+
+    fam := UserFamily{
+        UserID: uid,
+        RelatedUserID: in.RelatedUserID,
+        Relationship: in.Relationship,
+        IsVerified: false,
+    }
+
+    if err := DB.Create(&fam).Error; err != nil {
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+
+    c.JSON(201, fam)
+}
+
+func GetFamilyList(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+
+    var res []struct {
+        RelatedUserID int    `json:"user_id"`
+        Name          string `json:"name"`
+        Relationship  string `json:"relationship"`
+        IsVerified    bool   `json:"is_verified"`
+    }
+
+    DB.Table("UserFamily uf").
+        Select("u.user_id as related_user_id, u.name, uf.relationship, uf.is_verified").
+        Joins("JOIN User u ON uf.related_user_id = u.user_id").
+        Where("uf.user_id = ?", uid).
+        Scan(&res)
+
+    c.JSON(200, res)
+}
+
+func DeleteFamilyMember(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    rid, _ := strconv.Atoi(c.Param("related_id"))
+
+    DB.Delete(&UserFamily{}, "user_id = ? AND related_user_id = ?", uid, rid)
+    c.Status(204)
+}
+
+//查询搜索
+func SearchAppointments(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    q := DB.Where("user_id = ?", uid)
+
+    if v := c.Query("status"); v != "" {
+        q = q.Where("status = ?", v)
+    }
+    if s := c.Query("start_date"); s != "" {
+        q = q.Where("appointment_date >= ?", s)
+    }
+    if e := c.Query("end_date"); e != "" {
+        q = q.Where("appointment_date <= ?", e)
+    }
+
+    var appts []Appointment
+    q.Order("appointment_date desc").Find(&appts)
+    c.JSON(200, appts)
+}
+
+func SearchProviders(c *gin.Context) {
+    name := c.Query("name")
+
+    var ps []Provider
+    DB.Where("name LIKE ?", "%"+name+"%").Find(&ps)
+
+    c.JSON(200, ps)
+}
+
+func MetricSummary(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    metric := c.Query("metric_type")
+    month := c.Query("month") // YYYY-MM
+
+    var res struct {
+        Total float64 `json:"total"`
+        Avg   float64 `json:"avg"`
+    }
+
+    DB.Raw(`
+        SELECT 
+          SUM(metric_value) AS total,
+          AVG(metric_value) AS avg
+        FROM HealthMetric
+        WHERE user_id = ?
+          AND metric_type = ?
+          AND DATE_FORMAT(measured_at, '%Y-%m') = ?
+    `, uid, metric, month).Scan(&res)
+
+    c.JSON(200, res)
+}
+
+//接受邀请
+func AcceptInvitation(c *gin.Context) {
+    var in struct {
+        InvitationID int `json:"invitation_id" binding:"required"`
+        UserID       int `json:"user_id" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    var inv Invitation
+    if err := DB.First(&inv, in.InvitationID).Error; err != nil {
+        c.JSON(404, gin.H{"error": "邀请不存在"})
+        return
+    }
+
+    now := time.Now()
+    DB.Model(&inv).Updates(map[string]interface{}{
+        "status": "已接受",
+        "accepted_at": now,
+    })
+
+    p := Participation{
+        ChallengeID: inv.ChallengeID,
+        UserID: in.UserID,
+        JoinedAt: now,
+        Status: "参与中",
+    }
+    DB.Create(&p)
+
+    c.JSON(200, gin.H{"message": "已接受邀请"})
+}
+
+func PendingInvites(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+
+    var invs []Invitation
+    DB.Where("recipient_type = '用户ID' AND recipient_value = ? AND status = '待处理'",
+        strconv.Itoa(uid)).
+        Find(&invs)
+
+    c.JSON(200, invs)
+}
+
+//设置主治
+func SetPrimaryProvider(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var in struct {
+        ProviderID int `json:"provider_id" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    var cnt int64
+    DB.Model(&UserProvider{}).
+        Where("user_id = ? AND provider_id = ?", uid, in.ProviderID).
+        Count(&cnt)
+
+    if cnt == 0 {
+        c.JSON(400, gin.H{"error": "该医生尚未关联"})
+        return
+    }
+
+    DB.Model(&User{}).
+        Where("user_id = ?", uid).
+        Update("primary_provider_id", in.ProviderID)
+
+    c.JSON(200, gin.H{"message": "主治医生设置成功"})
+}
+
+func GetPrimaryProvider(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+
+    var res Provider
+    DB.Table("User u").
+        Joins("JOIN Provider p ON u.primary_provider_id = p.provider_id").
+        Where("u.user_id = ?", uid).
+        Scan(&res)
+
+    c.JSON(200, res)
+}
+
+func VerifyAccount(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var in struct {
+        Password string `json:"password" binding:"required"`
+    }
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    var u User
+    if err := DB.First(&u, uid).Error; err != nil {
+        c.JSON(404, gin.H{"error": "用户不存在"})
+        return
+    }
+
+    if in.Password != u.PasswordHash {
+        c.JSON(401, gin.H{"error": "密码错误"})
+        return
+    }
+
+    c.JSON(200, gin.H{"message": "账户验证通过"})
+}
+
 
 func Login(c *gin.Context) {
     var in struct {
