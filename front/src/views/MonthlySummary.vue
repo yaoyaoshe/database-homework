@@ -10,6 +10,7 @@
       </div>
       
       <div class="header-right">
+         <el-button type="success" icon="Plus" @click="showRecordDialog = true">记一笔</el-button>
         <el-date-picker 
           v-model="month" 
           type="month" 
@@ -129,11 +130,33 @@
 
       </template>
     </div>
+
+    <el-dialog v-model="showRecordDialog" title="录入健康数据" width="400px">
+      <el-form label-position="top">
+        <el-form-item label="日期时间">
+          <el-date-picker v-model="recordForm.date" type="datetime" placeholder="选择日期时间" style="width: 100%" value-format="YYYY-MM-DD HH:mm:ss" />
+        </el-form-item>
+        <el-form-item label="指标类型">
+          <el-select v-model="recordForm.metric_type" placeholder="请选择" style="width: 100%" @change="handleTypeChange">
+             <el-option v-for="opt in metricOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="数值">
+           <el-input v-model.number="recordForm.value" type="number" placeholder="请输入数值">
+             <template #append>{{ recordForm.unit }}</template>
+           </el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showRecordDialog = false">取消</el-button>
+        <el-button type="primary" @click="submitRecord" :loading="submitting">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import request from '@/utils/request'
 import { useUserStore } from '@/stores/user'
 import { ElMessage } from 'element-plus'
@@ -142,6 +165,31 @@ const userStore = useUserStore()
 const month = ref(new Date().toISOString().slice(0, 7) + '-01') // 默认当月1号
 const reportData = ref(null)
 const loading = ref(false)
+
+// 录入相关
+const showRecordDialog = ref(false)
+const submitting = ref(false)
+const recordForm = reactive({
+  date: '',
+  metric_type: '',
+  value: '',
+  unit: ''
+})
+
+const metricOptions = [
+  { label: '体重', value: '体重', unit: 'kg' },
+  { label: '收缩压 (高压)', value: '血压收缩压', unit: 'mmHg' },
+  { label: '舒张压 (低压)', value: '血压舒张压', unit: 'mmHg' },
+  { label: '步数', value: '步数', unit: '步' },
+  { label: '心率', value: '心率', unit: 'bpm' },
+  { label: '空腹血糖', value: '血糖空腹', unit: 'mmol/L' },
+  { label: '餐后血糖', value: '血糖餐后', unit: 'mmol/L' },
+]
+
+const handleTypeChange = (val) => {
+  const opt = metricOptions.find(o => o.value === val)
+  if (opt) recordForm.unit = opt.unit
+}
 
 // 计算属性：预约完成率
 const appointmentRate = computed(() => {
@@ -189,11 +237,42 @@ const fetchData = async () => {
   }
 }
 
+const submitRecord = async () => {
+  if(!recordForm.metric_type || !recordForm.value) return ElMessage.warning('请填写完整信息')
+  
+  submitting.value = true
+  try {
+    await request.post(`/users/${userStore.userId}/metrics`, {
+      metric_type: recordForm.metric_type,
+      value: parseFloat(recordForm.value),
+      unit: recordForm.unit,
+      date: recordForm.date || undefined
+    })
+    ElMessage.success('记录成功')
+    showRecordDialog.value = false
+    // 清空表单
+    recordForm.value = ''
+    recordForm.metric_type = ''
+    // 重新获取报告以更新数据
+    fetchData()
+  } catch(e) {
+    ElMessage.error('保存失败')
+  } finally {
+    submitting.value = false
+  }
+}
+
 const printReport = () => {
   window.print()
 }
 
-onMounted(fetchData)
+onMounted(() => {
+    // 设置默认时间为当前
+    const now = new Date()
+    const isoString = new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString()
+    recordForm.date = isoString.slice(0, 19).replace('T', ' ')
+    fetchData()
+})
 </script>
 
 <style scoped>

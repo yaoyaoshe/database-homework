@@ -91,6 +91,21 @@ type Appointment struct {
 }
 func (Appointment) TableName() string { return "Appointment" }
 
+// 新增 HealthMetric 模型
+type HealthMetric struct {
+    MetricID          int        `gorm:"column:metric_id;primaryKey" json:"metric_id"`
+    UserID            int        `gorm:"column:user_id" json:"user_id"`
+    MetricType        string     `gorm:"column:metric_type" json:"metric_type"`
+    MetricValue       float64    `gorm:"column:metric_value" json:"metric_value"`
+    Unit              string     `gorm:"column:unit" json:"unit"`
+    MeasuredAt        time.Time  `gorm:"column:measured_at" json:"measured_at"`
+    MeasurementDevice *string    `gorm:"column:measurement_device" json:"measurement_device"`
+    Notes             *string    `gorm:"column:notes" json:"notes"`
+    Source            string     `gorm:"column:source" json:"source"`
+    CreatedAt         time.Time  `gorm:"column:created_at" json:"created_at"`
+}
+func (HealthMetric) TableName() string { return "HealthMetric" }
+
 type Challenge struct {
     ChallengeID   int        `gorm:"column:challenge_id;primaryKey" json:"challenge_id"`
     CreatorID     int        `gorm:"column:creator_id" json:"creator_id"`
@@ -137,3 +152,17 @@ type Invitation struct {
     CreatedAt      time.Time  `gorm:"column:created_at" json:"created_at"`
 }
 func (Invitation) TableName() string { return "Invitation" }
+
+type ChallengeDailyProgress struct {
+    ProgressID    int       `gorm:"primaryKey;column:progress_id" json:"progress_id"`
+    ChallengeID   int       `gorm:"column:challenge_id" json:"challenge_id"`
+    UserID        int       `gorm:"column:user_id" json:"user_id"`
+    ProgressDate  time.Time `gorm:"column:progress_date" json:"progress_date"`
+    ProgressValue float64   `gorm:"column:progress_value" json:"progress_value"`
+    ProgressUnit  string    `gorm:"column:progress_unit" json:"progress_unit"`
+    IsCompleted   bool      `gorm:"column:is_completed" json:"is_completed"`
+    Notes         *string   `gorm:"column:notes" json:"notes"`
+    RecordedAt    time.Time `gorm:"column:recorded_at" json:"recorded_at"`
+}
+
+func (ChallengeDailyProgress) TableName() string { return "ChallengeDailyProgress" }

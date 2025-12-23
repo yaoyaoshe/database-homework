@@ -69,6 +69,9 @@ func RegisterRoutes(r *gin.Engine) {
         api.GET("/users/:id/family/requests", GetFamilyRequests) // 获取待处理请求
         api.POST("/users/:id/family/verify", VerifyFamilyRequest) // 处理请求(接受/拒绝)
 
+        // 🆕 新增：健康指标录入
+        api.POST("/users/:id/metrics", CreateHealthMetric)
+
         api.GET("/users/:id/appointments/search", SearchAppointments)
         api.GET("/providers/search", SearchProviders)
         api.GET("/users/:id/metrics/summary", MetricSummary)
@@ -143,7 +146,7 @@ func GetFamilyList(c *gin.Context) {
     uid, _ := strconv.Atoi(c.Param("id"))
 
     var res []struct {
-        RelatedUserID int    `json:"user_id"`
+        RelatedUserID int    `json:"related_user_id"` // 修复：这里原来是 json:"user_id"，导致前端删除时取不到ID
         Name          string `json:"name"`
         Relationship  string `json:"relationship"`
         IsVerified    bool   `json:"is_verified"`
@@ -277,6 +280,49 @@ func MetricSummary(c *gin.Context) {
     `, uid, metric, month).Scan(&res)
 
     c.JSON(200, res)
+}
+
+// 🆕 新增：录入健康指标
+func CreateHealthMetric(c *gin.Context) {
+    uid, _ := strconv.Atoi(c.Param("id"))
+    var in struct {
+        MetricType string  `json:"metric_type" binding:"required"`
+        Value      float64 `json:"value" binding:"required"`
+        Unit       string  `json:"unit" binding:"required"`
+        Date       string  `json:"date"` // 格式 YYYY-MM-DD 或 YYYY-MM-DD HH:mm:ss
+        Notes      string  `json:"notes"`
+    }
+
+    if err := c.ShouldBindJSON(&in); err != nil {
+        c.JSON(400, gin.H{"error": err.Error()})
+        return
+    }
+
+    measuredAt := time.Now()
+    if in.Date != "" {
+        // 尝试解析包含时间的格式
+        if t, err := time.Parse("2006-01-02 15:04:05", in.Date); err == nil {
+             measuredAt = t
+        } else if t, err := time.Parse("2006-01-02", in.Date); err == nil {
+             measuredAt = t
+        }
+    }
+
+    hm := HealthMetric{
+        UserID: uid,
+        MetricType: in.MetricType,
+        MetricValue: in.Value,
+        Unit: in.Unit,
+        MeasuredAt: measuredAt,
+        Source: "手动录入",
+    }
+    if in.Notes != "" { hm.Notes = &in.Notes }
+
+    if err := DB.Create(&hm).Error; err != nil {
+        c.JSON(500, gin.H{"error": err.Error()})
+        return
+    }
+    c.JSON(201, hm)
 }
 
 // ================= 挑战邀请逻辑优化 =================
@@ -935,20 +981,6 @@ func MostActiveUsers(c *gin.Context) {
     }
     c.JSON(http.StatusOK, rows)
 }
-
-type ChallengeDailyProgress struct {
-    ProgressID    int       `gorm:"primaryKey;column:progress_id"`
-    ChallengeID   int       `gorm:"column:challenge_id"`
-    UserID        int       `gorm:"column:user_id"`
-    ProgressDate  time.Time `gorm:"column:progress_date"`
-    ProgressValue float64   `gorm:"column:progress_value"`
-    ProgressUnit  string    `gorm:"column:progress_unit"`
-    IsCompleted   bool      `gorm:"column:is_completed"`
-    Notes         *string   `gorm:"column:notes"`
-    RecordedAt    time.Time `gorm:"column:recorded_at"`
-}
-
-func (ChallengeDailyProgress) TableName() string { return "ChallengeDailyProgress" }
 
 func CheckinChallenge(c *gin.Context) {
     challengeID, _ := strconv.Atoi(c.Param("id"))
