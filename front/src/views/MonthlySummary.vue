@@ -62,7 +62,7 @@
               <div class="stat-value text-blue">{{ reportData.total_challenges }}</div>
               <div class="stat-label">参与挑战数</div>
               <div class="stat-footer text-gray">
-                进行中/失败: {{ reportData.total_challenges - reportData.completed_challenges }} 个
+                已完成: {{ reportData.completed_challenges }} 个
               </div>
             </el-card>
           </el-col>
@@ -81,21 +81,36 @@
           <el-icon><TrendCharts /></el-icon> 健康数据摘要
         </div>
         
-        <el-card shadow="never" class="summary-grid-card">
-          <div v-if="Object.keys(parsedHealthSummary).length === 0" class="empty-text">
-            该月暂无详细健康指标数据
-          </div>
-          <div v-else class="metrics-grid">
-            <div 
-              v-for="(value, key) in parsedHealthSummary" 
-              :key="key" 
-              class="metric-item"
-            >
-              <div class="metric-key">{{ formatKey(key) }}</div>
-              <div class="metric-value">{{ value }}</div>
-            </div>
-          </div>
-        </el-card>
+        <el-row :gutter="20">
+            <el-col :span="8" v-if="parsedHealthSummary?.weight_stats">
+                <el-card class="metric-card" shadow="never">
+                    <template #header><div class="card-head"><el-icon><ScaleToOriginal /></el-icon> 体重记录</div></template>
+                    <div class="metric-grid">
+                        <div class="m-item"><span>平均</span><strong>{{ parsedHealthSummary.weight_stats.avg }} kg</strong></div>
+                        <div class="m-item"><span>最低</span><strong>{{ parsedHealthSummary.weight_stats.min }} kg</strong></div>
+                        <div class="m-item"><span>最高</span><strong>{{ parsedHealthSummary.weight_stats.max }} kg</strong></div>
+                    </div>
+                </el-card>
+            </el-col>
+             <el-col :span="8" v-if="parsedHealthSummary?.blood_pressure_stats">
+                <el-card class="metric-card" shadow="never">
+                     <template #header><div class="card-head"><el-icon><Odometer /></el-icon> 血压平均值</div></template>
+                    <div class="metric-grid">
+                        <div class="m-item"><span>收缩压 (高压)</span><strong>{{ parsedHealthSummary.blood_pressure_stats.systolic_avg }} mmHg</strong></div>
+                        <div class="m-item"><span>舒张压 (低压)</span><strong>{{ parsedHealthSummary.blood_pressure_stats.diastolic_avg }} mmHg</strong></div>
+                    </div>
+                </el-card>
+            </el-col>
+             <el-col :span="8" v-if="parsedHealthSummary?.step_stats">
+                 <el-card class="metric-card" shadow="never">
+                    <template #header><div class="card-head"><el-icon><Stopwatch /></el-icon> 运动步数</div></template>
+                    <div class="metric-grid">
+                        <div class="m-item"><span>本月总计</span><strong>{{ parsedHealthSummary.step_stats.total }} 步</strong></div>
+                        <div class="m-item"><span>日均步数</span><strong>{{ parsedHealthSummary.step_stats.daily_avg }} 步</strong></div>
+                    </div>
+                </el-card>
+            </el-col>
+        </el-row>
 
         <div class="section-title" style="margin-top: 30px;">
           <el-icon><FirstAidKit /></el-icon> 综合建议
@@ -150,14 +165,10 @@ const parsedHealthSummary = computed(() => {
     // 如果后端返回已经是对象则直接用，如果是字符串则解析
     return typeof raw === 'string' ? JSON.parse(raw) : raw
   } catch (e) {
-    return { "数据解析错误": "无法加载详情" }
+    console.error("JSON解析失败", e)
+    return {}
   }
 })
-
-// 工具函数：格式化 JSON 的 Key 显示 (例如 avg_steps -> Avg Steps)
-const formatKey = (key) => {
-  return key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-}
 
 const fetchData = async () => {
   if (!userStore.userId) return
@@ -209,25 +220,13 @@ onMounted(fetchData)
 .chart-container { display: flex; justify-content: center; margin-bottom: 10px; }
 .center-text { text-align: center; }
 
-/* 健康摘要网格 */
-.summary-grid-card { border-radius: 12px; }
-.metrics-grid { 
-  display: grid; 
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); 
-  gap: 20px; 
-}
-.metric-item { 
-  background: #fcfcfc; 
-  border: 1px solid #ebeef5; 
-  padding: 15px; 
-  border-radius: 8px; 
-  text-align: center;
-  transition: all 0.3s;
-}
-.metric-item:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
-.metric-key { font-size: 13px; color: #909399; margin-bottom: 5px; text-transform: capitalize; }
-.metric-value { font-size: 20px; font-weight: 600; color: #303133; }
-.empty-text { text-align: center; color: #909399; padding: 20px; }
+/* 详情数据卡片 */
+.metric-card { border-radius: 8px; height: 100%; }
+.card-head { display: flex; align-items: center; gap: 8px; font-weight: bold; color: #606266; }
+.metric-grid { display: flex; flex-direction: column; gap: 12px; padding: 10px 0; }
+.m-item { display: flex; justify-content: space-between; border-bottom: 1px dashed #eee; padding-bottom: 8px; }
+.m-item span { color: #909399; font-size: 14px; }
+.m-item strong { color: #303133; font-size: 16px; }
 
 /* 建议卡片 */
 .advice-card { border-radius: 12px; background: linear-gradient(135deg, #f0f9eb 0%, #e1f3d8 100%); border: 1px solid #c2e7b0; }

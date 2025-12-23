@@ -267,9 +267,11 @@ const getProviderName = (pid) => {
   return doc ? doc.name : `ID: ${pid}`
 }
 
+// 修改为显示年月日 (YYYY-MM-DD)
 const formatTime = (t) => {
   if(!t) return ''
-  return new Date(t).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  const d = new Date(t)
+  return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`
 }
 
 const getStatusType = (status) => {

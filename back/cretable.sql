@@ -326,13 +326,13 @@ DELIMITER ;
 -- ==================== 创建存储过程 ====================
 
 -- 存储过程1：生成月度健康报告
+-- 修改：即使存在也重新生成（确保数据最新）
 DELIMITER //
 CREATE PROCEDURE GenerateMonthlyReport(
     IN p_user_id INT,
     IN p_month DATE
 )
 BEGIN
-    DECLARE v_report_exists INT;
     DECLARE v_total_appointments INT;
     DECLARE v_completed_appointments INT;
     DECLARE v_cancelled_appointments INT;
@@ -340,96 +340,91 @@ BEGIN
     DECLARE v_completed_challenges INT;
     DECLARE v_health_summary JSON;
     
-    -- 检查是否已存在该月报表
-    SELECT COUNT(*) INTO v_report_exists 
-    FROM MonthlyReport 
+    -- 1. 删除已存在的旧报告（确保重新计算）
+    DELETE FROM MonthlyReport 
     WHERE user_id = p_user_id AND report_month = p_month;
     
-    IF v_report_exists = 0 THEN
-        -- 1. 计算当月预约统计
-        SELECT 
-            COUNT(*) AS total,
-            SUM(CASE WHEN status = '已完成' THEN 1 ELSE 0 END) AS completed,
-            SUM(CASE WHEN status = '已取消' THEN 1 ELSE 0 END) AS cancelled
-        INTO v_total_appointments, v_completed_appointments, v_cancelled_appointments
-        FROM Appointment
-        WHERE user_id = p_user_id
-          AND YEAR(appointment_date) = YEAR(p_month)
-          AND MONTH(appointment_date) = MONTH(p_month);
-        
-        -- 2. 计算挑战参与统计
-        SELECT 
-            COUNT(*) AS total,
-            SUM(CASE WHEN p.status = '已完成' THEN 1 ELSE 0 END) AS completed
-        INTO v_total_challenges, v_completed_challenges
-        FROM Participation p
-        JOIN Challenge c ON p.challenge_id = c.challenge_id
-        WHERE p.user_id = p_user_id
-          AND YEAR(c.start_date) = YEAR(p_month)
-          AND MONTH(c.start_date) = MONTH(p_month);
-        
-        -- 3. 获取健康指标统计
-        SET v_health_summary = (
-            SELECT JSON_OBJECT(
-                'weight_stats', (
-                    SELECT JSON_OBJECT(
-                        'avg', ROUND(AVG(metric_value), 2),
-                        'min', ROUND(MIN(metric_value), 2),
-                        'max', ROUND(MAX(metric_value), 2)
-                    )
-                    FROM HealthMetric
-                    WHERE user_id = p_user_id
-                      AND metric_type = '体重'
-                      AND YEAR(measured_at) = YEAR(p_month)
-                      AND MONTH(measured_at) = MONTH(p_month)
-                ),
-                'blood_pressure_stats', (
-                    SELECT JSON_OBJECT(
-                        'systolic_avg', ROUND(AVG(CASE WHEN metric_type = '血压收缩压' THEN metric_value END), 2),
-                        'diastolic_avg', ROUND(AVG(CASE WHEN metric_type = '血压舒张压' THEN metric_value END), 2)
-                    )
-                    FROM HealthMetric
-                    WHERE user_id = p_user_id
-                      AND metric_type IN ('血压收缩压', '血压舒张压')
-                      AND YEAR(measured_at) = YEAR(p_month)
-                      AND MONTH(measured_at) = MONTH(p_month)
-                ),
-                'step_stats', (
-                    SELECT JSON_OBJECT(
-                        'total', SUM(metric_value),
-                        'daily_avg', ROUND(AVG(metric_value), 2)
-                    )
-                    FROM HealthMetric
-                    WHERE user_id = p_user_id
-                      AND metric_type = '步数'
-                      AND YEAR(measured_at) = YEAR(p_month)
-                      AND MONTH(measured_at) = MONTH(p_month)
-                ),
-                'generated_at', NOW()
-            )
-        );
-        
-        -- 4. 插入月度报告
-        INSERT INTO MonthlyReport (
-            user_id, report_month, 
-            total_appointments, completed_appointments, cancelled_appointments,
-            total_challenges, completed_challenges,
-            health_summary, recommendations
-        ) VALUES (
-            p_user_id, p_month,
-            COALESCE(v_total_appointments, 0), 
-            COALESCE(v_completed_appointments, 0),
-            COALESCE(v_cancelled_appointments, 0),
-            COALESCE(v_total_challenges, 0),
-            COALESCE(v_completed_challenges, 0),
-            v_health_summary,
-            '请继续保持健康生活习惯，定期监测健康指标。'
-        );
-        
-        SELECT '月度健康报告生成成功' AS message;
-    ELSE
-        SELECT '本月健康报告已存在' AS message;
-    END IF;
+    -- 2. 计算当月预约统计
+    SELECT 
+        COUNT(*) AS total,
+        SUM(CASE WHEN status = '已完成' THEN 1 ELSE 0 END) AS completed,
+        SUM(CASE WHEN status = '已取消' THEN 1 ELSE 0 END) AS cancelled
+    INTO v_total_appointments, v_completed_appointments, v_cancelled_appointments
+    FROM Appointment
+    WHERE user_id = p_user_id
+        AND YEAR(appointment_date) = YEAR(p_month)
+        AND MONTH(appointment_date) = MONTH(p_month);
+    
+    -- 3. 计算挑战参与统计
+    SELECT 
+        COUNT(*) AS total,
+        SUM(CASE WHEN p.status = '已完成' THEN 1 ELSE 0 END) AS completed
+    INTO v_total_challenges, v_completed_challenges
+    FROM Participation p
+    JOIN Challenge c ON p.challenge_id = c.challenge_id
+    WHERE p.user_id = p_user_id
+        AND YEAR(c.start_date) = YEAR(p_month)
+        AND MONTH(c.start_date) = MONTH(p_month);
+    
+    -- 4. 获取健康指标统计
+    SET v_health_summary = (
+        SELECT JSON_OBJECT(
+            'weight_stats', (
+                SELECT JSON_OBJECT(
+                    'avg', IFNULL(ROUND(AVG(metric_value), 2), 0),
+                    'min', IFNULL(ROUND(MIN(metric_value), 2), 0),
+                    'max', IFNULL(ROUND(MAX(metric_value), 2), 0)
+                )
+                FROM HealthMetric
+                WHERE user_id = p_user_id
+                    AND metric_type = '体重'
+                    AND YEAR(measured_at) = YEAR(p_month)
+                    AND MONTH(measured_at) = MONTH(p_month)
+            ),
+            'blood_pressure_stats', (
+                SELECT JSON_OBJECT(
+                    'systolic_avg', IFNULL(ROUND(AVG(CASE WHEN metric_type = '血压收缩压' THEN metric_value END), 2), 0),
+                    'diastolic_avg', IFNULL(ROUND(AVG(CASE WHEN metric_type = '血压舒张压' THEN metric_value END), 2), 0)
+                )
+                FROM HealthMetric
+                WHERE user_id = p_user_id
+                    AND metric_type IN ('血压收缩压', '血压舒张压')
+                    AND YEAR(measured_at) = YEAR(p_month)
+                    AND MONTH(measured_at) = MONTH(p_month)
+            ),
+            'step_stats', (
+                SELECT JSON_OBJECT(
+                    'total', IFNULL(SUM(metric_value), 0),
+                    'daily_avg', IFNULL(ROUND(AVG(metric_value), 2), 0)
+                )
+                FROM HealthMetric
+                WHERE user_id = p_user_id
+                    AND metric_type = '步数'
+                    AND YEAR(measured_at) = YEAR(p_month)
+                    AND MONTH(measured_at) = MONTH(p_month)
+            ),
+            'generated_at', NOW()
+        )
+    );
+    
+    -- 5. 插入月度报告
+    INSERT INTO MonthlyReport (
+        user_id, report_month, 
+        total_appointments, completed_appointments, cancelled_appointments,
+        total_challenges, completed_challenges,
+        health_summary, recommendations
+    ) VALUES (
+        p_user_id, p_month,
+        COALESCE(v_total_appointments, 0), 
+        COALESCE(v_completed_appointments, 0),
+        COALESCE(v_cancelled_appointments, 0),
+        COALESCE(v_total_challenges, 0),
+        COALESCE(v_completed_challenges, 0),
+        v_health_summary,
+        '请继续保持健康生活习惯，定期监测健康指标。'
+    );
+    
+    SELECT '月度健康报告生成成功' AS message;
 END;
 //
 DELIMITER ;
